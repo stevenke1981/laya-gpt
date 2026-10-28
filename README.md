@@ -7,7 +7,7 @@
 
 | | jev-gpt | laya-gpt |
 |---|---|---|
-| 決策模型 | OpenRouter 上的 `typesafe/jev-1.14`（需金鑰、按次計費） | **本機 [laya-deploy](https://github.com/stevenke1981/laya-deploy)**（`127.0.0.1:8100`，免金鑰，約 40–200 ms） |
+| 決策模型 | OpenRouter 上的 `typesafe/jev-1.14`（需金鑰、按次計費） | **本機 [laya-deploy](https://github.com/stevenke1981/laya-deploy)**（`127.0.0.1:8100`，免金鑰，每次約 40–300 ms） |
 | 問法 | `score`／`noul`，state 為整段軌跡 | **laya decision mode**：state 只放一句被判斷的主體、全用 `choice`、無 catch-all、門檻由程式持有 |
 | 信任方式 | 信心 ≥ 0.3 即採用 | **laya 受規則把關**：信心 < 0.5 棄權改用規則；turn 中 laya 只能調高 effort；停止判斷與規則取大 |
 | 長任務 | 計畫提醒＋續跑（上限 3） | 同上，**上限 5**，另加「第一人稱承諾工作」規則（I will fix…／我會再修…） |
@@ -23,7 +23,7 @@ uv run laya-deploy serve                       # 或 scripts\start-server.ps1
 curl.exe -s http://127.0.0.1:8100/health       # {"status":"ok",...}
 ```
 
-laya 未啟動時 laya-gpt 照常運作：每次決策連線失敗即改用規則（`source` 會寫 `heuristic (laya failed: …)`），不擋住客戶端。checkpoint 第一次載入約 40 秒，期間的決策會逾時改用規則。
+laya 未啟動時 laya-gpt 照常運作：每次決策連線失敗即改用規則（`source` 會寫 `heuristic (laya failed: …)`），不擋住客戶端。laya 若卡住不回（例如 checkpoint 第一次載入約 40 秒），一次逾時（`LAYA_DECISION_TIMEOUT_MS`，2 秒）後暫停呼叫 laya 30 秒，期間直接用規則，不再每次等逾時。
 
 ## Effort 如何決定
 
@@ -32,7 +32,7 @@ proxy 位於 Codex（或 Chat Completions 客戶端）與上游之間，每次 g
 | 時機 | state | 問題（`choice`，選項即 effort 階梯） | 把關 |
 |---|---|---|---|
 | 新 turn | `{"request": "<使用者需求前 800 字>"}` | 這個需求要多少推理？low＝招呼／簡單問題、medium＝一般程式工作、high＝設計／跨模組重構／除錯根因、xhigh＝系統重設計／久攻不下的安全或並行問題 | laya 主導；最高機率 < 0.5 則棄權改用規則 |
-| turn 中 | `{"last_step": "ran the tests or build, it failed; 2 failures in a row; the same failing command was repeated"}` | 下一步要多少推理？＋是否卡住（`stuck`／`progressing`） | laya **只能調高**：與規則取較高者，同級時沿用規則（含 hold）。laya 不擅長數失敗次數，故規則的升級永遠成立 |
+| turn 中 | `{"last_step": "ran the tests or build, it failed; 2 failures in a row; the same failing command was repeated"}` | 下一步要多少推理？＋是否卡住（`stuck`／`progressing`） | laya **只能調高**：與規則取較高者，同級時沿用規則（含 hold）。laya 不擅長數失敗次數，故 laya 不能把 effort 調得比規則低（laya 勝出時 hold 改依其 `stuck` 機率） |
 
 `last_step` 由程式把數字轉成少數固定片語（first failure／2 failures in a row／4 or more failures in a row／read 5 files since the last edit…），相同情境問相同問題。
 
@@ -118,7 +118,7 @@ codex -p layagpt           # 視窗 2
 
 **更新後請重啟 proxy**（`git pull` 後 `laya-gpt stop`）。`/laya/health` 回報 `app`、`version`、`build`、`pid`、`startedAt`、`mode`、`ladder` 與 `stats`（含 `byEffort`、`continued`、`nudged`）。`decisions.jsonl` 每筆另有 `nudged: true` 與 `continues: [{n, effort, unfinished, source, reasons}]`（有發生時）。
 
-**上游與憑證**：`LAYA_UPSTREAM` 強制指定；ChatGPT 登入（JWT 或 `chatgpt-account-id`）→ `chatgpt.com/backend-api/codex`；`sk-or-` 金鑰 → `openrouter.ai/api/v1`；其他 → `api.openai.com/v1`。proxy 不寫入任何憑證到記錄；送給 laya 的只有需求前 800 字、一句步驟描述或收尾文字末 500 字，且只送往本機。
+**上游與憑證**：`LAYA_UPSTREAM` 強制指定；ChatGPT 登入（JWT 或 `chatgpt-account-id`）→ `chatgpt.com/backend-api/codex`；`sk-or-` 金鑰 → `openrouter.ai/api/v1`；其他 → `api.openai.com/v1`。proxy 不寫入任何憑證到記錄；送給 laya 的只有需求前 800 字、一句步驟描述或收尾文字末 500 字，預設送往本機 laya；若改 `LAYA_DECISION_URL` 指向他處，這些文字與 `LAYA_API_KEY` 也會送往該處。
 
 ## Chat Completions 客戶端
 
@@ -130,8 +130,8 @@ proxy 也代理 `POST /v1/chat/completions`。opencode、aider、crush 把 base 
   "provider": {
     "laya": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "laya-gpt (OpenRouter)",
-      "options": { "baseURL": "http://127.0.0.1:8790/v1", "apiKey": "{env:OPENROUTER_API_KEY}" },
+      "name": "laya-gpt",
+      "options": { "baseURL": "http://127.0.0.1:8790/v1", "apiKey": "{env:OPENAI_API_KEY}" },
       "models": { "laya-auto": { "name": "GPT-6.1 Terra (laya effort)" } }
     }
   }
@@ -139,7 +139,7 @@ proxy 也代理 `POST /v1/chat/completions`。opencode、aider、crush 把 base 
 ```
 
 ```powershell
-$env:OPENAI_API_KEY = $env:OPENROUTER_API_KEY
+# OPENAI_API_KEY 原樣轉給上游；sk-or- 開頭的 OpenRouter 金鑰會自動走 OpenRouter
 aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 ```
 
@@ -156,7 +156,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 | `LAYA_DECISION_URL` | `http://127.0.0.1:8100/api/alpha/decisions` | laya-deploy Decisions API |
 | `LAYA_DECISION_MODEL` | `english` | laya checkpoint（`english`、`multilingual`、`auto`…）；實測 english 讀中文亦可 |
 | `LAYA_API_KEY` | — | laya-deploy 設了 `LAYA_DEPLOY_API_KEY` 時填同值 |
-| `LAYA_DECISION_TIMEOUT_MS` | `2000` | 單次 laya 決策逾時 |
+| `LAYA_DECISION_TIMEOUT_MS` | `2000` | 單次 laya 決策逾時（至少 1）；逾時後暫停 laya 30 秒 |
 | `LAYA_MIN_CONFIDENCE` | `0.5` | laya 最高機率低於此值即棄權，改用規則 |
 | `LAYA_CONTINUE` | `on` | 提早收工自動續跑 |
 | `LAYA_MAX_CONTINUES` | `5` | 每個 turn 最多續跑次數 |
@@ -192,6 +192,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 - laya 實測案例僅 29 則，皆為短句；長篇、混雜程式碼的收尾文字之準確度未量測。請以 `laya-gpt stats` 與 `decisions.jsonl` 在自身工作量觀察，必要時調 `LAYA_CONTINUE_THRESHOLD`、`LAYA_MIN_CONFIDENCE`。
 - 困難需求 laya 常信心不足而棄權（實測 0.37–0.40），此時由關鍵字規則決定。
 - 回傳給客戶端的 `usage` 只含最後一個回應；續跑那一代的 tokens 也算在上游帳單裡。
+- 停止判斷取 laya 與規則之大者：收尾若是請使用者核可（"I need your approval to continue"）而 laya 判為 in progress，仍可能續跑；續跑上限 `LAYA_MAX_CONTINUES` 為最後防線。
 - Chat Completions 不續跑；Codex 的 websocket 傳輸不經過 proxy。
 
 ## 測試
@@ -206,3 +207,4 @@ node scripts/laya-eval.mjs        # 需執行中的 laya：量測 effort 與停�
 | 版本 | 日期 | 內容 | 影響範圍 |
 |------|------|------|----------|
 | v0.1.0 | 2026-10-29 | 初始建立（衍生自 jev-gpt 871082f）：決策改由本機 laya（decision mode、choice 問題、規則把關）、預設 GPT-6.1 Terra medium、laya 選 low～xhigh、續跑上限 5、第一人稱承諾規則、CLI `laya-gpt`（埠 8790、profile `layagpt`） | 全部 |
+| v0.1.1 | 2026-10-29 | 依獨立審查修正：句尾條件式提議（"I'll add docs if you want"、「你想要的話我會改」）不再算承諾；承諾規則改為有界視窗（避免長文字二次方耗時）；laya 逾時後暫停 30 秒；`LAYA_DECISION_TIMEOUT_MS` 須 ≥ 1；README 更正 | `longtask.js`、`decisions.js`、`config.js`、README |

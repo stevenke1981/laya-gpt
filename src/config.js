@@ -43,6 +43,9 @@ export function loadConfig(env = process.env) {
   if (!ladder.includes(defaultEffort)) {
     throw new Error(`LAYA_DEFAULT_EFFORT must be one of LAYA_LEVELS (${ladder.join(',')}); got "${defaultEffort}"`);
   }
+  const decisionTimeoutMs = intEnv(env, 'LAYA_DECISION_TIMEOUT_MS', 2000);
+  // 0 would abort every call and silently turn laya off; LAYA_MODE=heuristic does that openly.
+  if (decisionTimeoutMs < 1) throw new Error('LAYA_DECISION_TIMEOUT_MS must be at least 1; use LAYA_MODE=heuristic to turn laya off');
   return Object.freeze({
     host: env.LAYA_HOST || '127.0.0.1',
     port: intEnv(env, 'LAYA_PORT', 8790),
@@ -74,7 +77,7 @@ export function loadConfig(env = process.env) {
     decisionUrl: env.LAYA_DECISION_URL || 'http://127.0.0.1:8100/api/alpha/decisions',
     decisionModel: env.LAYA_DECISION_MODEL || 'english',
     decisionKey: env.LAYA_API_KEY || '',
-    decisionTimeoutMs: intEnv(env, 'LAYA_DECISION_TIMEOUT_MS', 2000),
+    decisionTimeoutMs,
     // laya is overconfident: below this top probability it abstains and the rules decide.
     minConfidence: probabilityEnv(env, 'LAYA_MIN_CONFIDENCE', 0.5),
     home,

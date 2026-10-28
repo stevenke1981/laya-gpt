@@ -168,14 +168,34 @@ export function combineEffort(laya, heuristic, newTurn) {
   return { ...heuristic, reasons: [...heuristic.reasons, ...laya.reasons] };
 }
 
+// A laya that times out or cannot be reached is skipped for a while, so a hung server (a
+// checkpoint still loading, a stalled GPU) costs one timeout, not one per generation.
+const PAUSE_MS = 30_000;
+const pausedUntil = new Map();
+
+/** Ends every pause; for tests. */
+export function resetLayaPause() {
+  pausedUntil.clear();
+}
+
 /** POSTs one Decisions request; resolves to the parsed body or throws on HTTP error. */
 async function postDecision(opts, state, questions) {
-  const res = await fetch(opts.url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}) },
-    body: JSON.stringify({ model: opts.model, state, questions }),
-    signal: AbortSignal.timeout(opts.timeoutMs),
-  });
+  const until = pausedUntil.get(opts.url) ?? 0;
+  if (Date.now() < until) throw new Error(`laya paused for ${Math.ceil((until - Date.now()) / 1000)} s after a timeout`);
+  let res;
+  try {
+    res = await fetch(opts.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}) },
+      body: JSON.stringify({ model: opts.model, state, questions }),
+      signal: AbortSignal.timeout(opts.timeoutMs),
+    });
+  } catch (err) {
+    // Only a timeout pauses: a refused connection fails at once and costs nothing.
+    if (err?.name === 'TimeoutError') pausedUntil.set(opts.url, Date.now() + PAUSE_MS);
+    throw err;
+  }
+  pausedUntil.delete(opts.url);
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(`laya HTTP ${res.status}: ${body?.error?.message ?? 'no error body'}`);
   return body;

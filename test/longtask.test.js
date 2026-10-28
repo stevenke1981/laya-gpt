@@ -348,7 +348,21 @@ test('assessStop: a work verb promised in the first person counts, an offer does
     'Done with the refactor. If you like, I will update the README too.',
     'I will be happy to help further.',
     '完成了。如果你需要，我會補上文件。',
+    // The condition after the promise is an offer too.
+    "Tests pass. I'll add docs if you want.",
+    "All done! I'll run the suite again later if anything changes.",
+    "I'll write the summary below",
+    '測試全過。你想要的話我會改文件。',
+    '完成。我會補上文件，如果你需要的話。',
   ]) {
     assert.deepEqual(assessStop(edited, null, text), { unfinished: 0.1, reasons: ['looks done'] }, text);
   }
+});
+
+test('assessStop: a long run of text with no sentence end stays fast', () => {
+  const edited = turn([{ kind: 'edit', command: 'apply_patch', failed: false }]);
+  const start = performance.now();
+  assessStop(edited, null, '如果你需要' + '我會 '.repeat(100_000));
+  assessStop(edited, null, 'if you want ' + 'I will fix '.repeat(40_000));
+  assert.ok(performance.now() - start < 1000, `took ${Math.round(performance.now() - start)} ms`);
 });

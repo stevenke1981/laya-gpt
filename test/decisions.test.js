@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
-  situation, effortCall, toAssessment, combineEffort, layaDecide, closingOf, layaStopCheck,
+  situation, effortCall, toAssessment, combineEffort, layaDecide, closingOf, layaStopCheck, resetLayaPause,
 } from '../src/decisions.js';
 import { createRouter } from '../src/router.js';
 import { loadConfig } from '../src/config.js';
@@ -201,4 +201,26 @@ test('config: laya is the default mode and needs no key; the local server is the
   assert.equal(loadConfig({ LAYA_API_KEY: 'k' }).decisionKey, 'k');
   assert.throws(() => loadConfig({ LAYA_MIN_CONFIDENCE: '2' }), /LAYA_MIN_CONFIDENCE/);
   assert.throws(() => loadConfig({ LAYA_DECISION_TIMEOUT_MS: '-1' }), /LAYA_DECISION_TIMEOUT_MS/);
+  assert.throws(() => loadConfig({ LAYA_DECISION_TIMEOUT_MS: '0' }), /LAYA_DECISION_TIMEOUT_MS must be at least 1/);
+});
+
+test('a laya that times out is paused, so later calls fail at once; an answer ends the pause', async () => {
+  let hang = true;
+  const { server, seen, url } = await decisionsServer((res) => {
+    if (!hang) reply(effortAnswers('high', 0.8))(res);
+  });
+  try {
+    await assert.rejects(layaDecide(turn, opts(url, { timeoutMs: 50 })), { name: 'TimeoutError' });
+    const start = Date.now();
+    await assert.rejects(layaDecide(turn, opts(url, { timeoutMs: 50 })), /laya paused for \d+ s after a timeout/);
+    assert.ok(Date.now() - start < 40);
+    assert.equal(seen.length, 1);
+    resetLayaPause();
+    hang = false;
+    assert.equal((await layaDecide(turn, opts(url))).target, 2);
+  } finally {
+    resetLayaPause();
+    server.closeAllConnections();
+    server.close();
+  }
 });
