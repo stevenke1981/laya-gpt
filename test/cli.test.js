@@ -127,6 +127,32 @@ test('serve names the other app when its port is taken and does not reuse it', a
   }
 });
 
+test('serve follows decisions when an existing laya-gpt proxy owns the port', async () => {
+  const fake = await fakeHealthServer({ app: 'laya-gpt', version: '0.3.0', build: 'old', pid: 123 });
+  const home = tempDir();
+  const child = spawn(process.execPath, [CLI, 'serve'], {
+    env: { ...process.env, LAYA_PORT: String(fake.port), LAYA_HOME: home },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  try {
+    for (let i = 0; i < 50 && !output.includes('following'); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.match(output, /Following decisions/);
+    fs.appendFileSync(path.join(home, 'decisions.jsonl'), JSON.stringify({ step: 7, effort: 'high', hold: 1, ms: 3, reasons: ['test decision'] }) + '\n');
+    for (let i = 0; i < 50 && !output.includes('test decision'); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.match(output, /HIGH/);
+    assert.match(output, /test decision/);
+    assert.equal(child.exitCode, null);
+  } finally {
+    child.kill();
+    await new Promise((r) => child.once('exit', r));
+    await fake.close();
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('install writes the layagpt Codex profile for the configured model and default effort, refusing foreign files', async () => {
   const codexHome = tempDir();
   const env = { ...process.env, CODEX_HOME: codexHome, LAYA_PORT: '9999', LAYA_GPT_MODEL: 'gpt-6.1-terra', LAYA_HOME: codexHome };

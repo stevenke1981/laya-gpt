@@ -18,7 +18,7 @@ export function formatDecision(d) {
   const levels = effortLevels(d);
   const reasons = d.reasons ?? [];
   const gens = Math.max(1, d.hold);
-  const detail = [`Step ${d.step}`, ...(d.effort ? [`next ${gens} generation(s)`] : []), `${d.ms} ms`, reasons.join('; ')];
+  const detail = [`Step ${d.step}`, ...(d.source ? [`source: ${d.source}`] : []), ...(d.effort ? [`next ${gens} generation(s)`] : []), `${d.ms} ms`, reasons.join('; ')];
   return `${C.blue}Laya${C.reset}  ${C.bold}${levels}${C.reset}  ${C.green}✓ APPLIED${C.reset}\n`
     + `${C.dim}     ${detail.join(' · ')}${C.reset}`;
 }

@@ -180,6 +180,15 @@ async function portOwnerHint(config) {
 function serve(config) {
   const { server } = createProxy(config);
   server.on('error', async (err) => {
+    if (err.code === 'EADDRINUSE') {
+      const running = await probe(config);
+      if (isOurProxy(running)) {
+        console.log(`${NAME}: ${compareBuild(running).message}`);
+        console.log('Following decisions from the configured LAYA_HOME; records appear after each response completes.');
+        console.log('Send requests through laya-gpt codex or codex -p layagpt; Ctrl+C stops viewing only.');
+        return tail(config);
+      }
+    }
     const hint = err.code === 'EADDRINUSE' ? await portOwnerHint(config) : '';
     console.error(`${NAME}: ${err.message}${hint}`);
     process.exit(1);
