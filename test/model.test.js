@@ -89,5 +89,5 @@ test('router: laya leads a new turn but inside a turn it may only raise the effo
   const stuck = await router.route({}, 's2', null, parseTurn([userMsg('fix it'), ...fail(1), ...fail(2), ...fail(3)]));
   assert.equal(stuck.effort, 'xhigh');
   assert.match(stuck.reasons.join(';'), /3 failures in a row;laya medium 0.80/);
-  assert.deepEqual(seen[0], [0, 'http://127.0.0.1:8100/api/alpha/decisions', 'english', 0.5]);
+  assert.deepEqual(seen[0], [0, 'http://127.0.0.1:8100/api/alpha/decisions', 'multilingual', 0.5]);
 });

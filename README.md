@@ -15,13 +15,16 @@
 
 jev-gpt 與 laya-gpt 可同時執行。
 
-## 先啟動 laya
+## laya 由 laya-gpt 安裝與啟動
+
+laya 本身是 Python（torch＋laya），放在獨立的 [laya-deploy](https://github.com/stevenke1981/laya-deploy) checkout；laya-gpt 負責安裝、啟動、停止它，自己仍零依賴。
 
 ```powershell
-cd D:\laya-deploy
-uv run laya-deploy serve                       # 或 scripts\start-server.ps1
-curl.exe -s http://127.0.0.1:8100/health       # {"status":"ok",...}
+laya-gpt setup                          # 第一次：clone laya-deploy 到 ~/.laya-gpt/laya-deploy、uv sync（約 3 GB）、下載 multilingual（約 650 MB）
+laya-gpt setup --dir D:\laya-deploy     # 已有 checkout 時改用它（會記住此路徑）
 ```
+
+需要 `git` 與 [uv](https://docs.astral.sh/uv/)。之後 `laya-gpt serve`（或 `laya-gpt codex`）發現 8100 沒有 laya 時，會在背景以該 checkout 的 `.venv` Python 啟動 laya-deploy，並預先載入 laya-gpt 用的 checkpoint（`LAYA_DEPLOY_PRELOAD`），不等它載完——載入期間（約 10–40 秒）決策先用規則。`laya-gpt status` 顯示 laya 狀態；`laya-gpt stop` 會一併停掉**由 laya-gpt 啟動的** laya（手動啟動的不動）。`LAYA_AUTOSTART=off` 關閉自動啟動；`LAYA_DECISION_URL` 不是本機位址時也不會自動啟動。
 
 laya 未啟動時 laya-gpt 照常運作：每次決策連線失敗即改用規則（`source` 會寫 `heuristic (laya failed: …)`），不擋住客戶端。laya 若卡住不回（例如 checkpoint 第一次載入約 40 秒），一次逾時（`LAYA_DECISION_TIMEOUT_MS`，2 秒）後暫停呼叫 laya 30 秒，期間直接用規則，不再每次等逾時。
 
@@ -62,7 +65,17 @@ GPT-6.1 Terra 在長任務中常提早結束 turn：寫個摘要、說「接下�
 
 laya 失敗時只用規則。`heuristic`／`llm` 模式只用規則；`off` 不續跑。
 
-### 實測（`node scripts/laya-eval.mjs`，english checkpoint、RTX 3060 Ti）
+### 實測（`node scripts/laya-eval.mjs`，RTX 3060 Ti）
+
+預設 checkpoint 自 v0.3.0 起為 **multilingual**（主人實際使用時 english 容易跑偏，尤其中文與混雜文字）。同一組 29 題：multilingual **26/29**、english 28/29。
+
+| 項目 | multilingual | 說明 |
+|---|---|---|
+| 新 turn effort | 7/9 | 「hi there」給 medium（預期 low）；「重構整個認證架構並找出 session 競態的根因」給 xhigh 0.51（預期 high）——兩者都只是多花推理，不會少做 |
+| turn 中 effort | 6/7 | 第一次失敗給 high（預期 medium），偏保守 |
+| 停止判斷 | 13/13 | 加入「`end` 以 ≥ 0.9 判定已完成時忽略 `work` 的進行中」把關後；未加時，完成的條列摘要會被誤判續跑 |
+
+以下為 v0.1 時 english 的分項：
 
 | 項目 | 結果 | 說明 |
 |---|---|---|
@@ -90,6 +103,7 @@ git clone https://github.com/stevenke1981/laya-gpt.git
 cd laya-gpt                # 一定要在這個資料夾執行 npm link
 npm link                   # 註冊全域指令 laya-gpt（或直接 node bin/laya.js ...）
 laya-gpt --version
+laya-gpt setup             # 安裝本機 laya（見上節；已有 laya-deploy 用 --dir）
 laya-gpt install           # 寫入 $CODEX_HOME/layagpt.config.toml（預設 ~/.codex）
 ```
 
@@ -108,6 +122,7 @@ codex -p layagpt           # 視窗 2
 | 指令 | 用途 |
 |---|---|
 | `laya-gpt serve` | 前景執行 proxy（預設 `127.0.0.1:8790`） |
+| `laya-gpt setup [--dir D]` | 安裝 laya-deploy（clone、`uv sync --extra model`、下載 checkpoint） |
 | `laya-gpt install [--force]` | 寫入 `layagpt` profile |
 | `laya-gpt install --global` | 另把 laya-gpt 設為 `config.toml` 的預設 provider（給 Codex 桌面版／IDE 擴充） |
 | `laya-gpt uninstall` | 還原 `config.toml`、移除本工具寫的 profile |
@@ -169,7 +184,10 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 | `LAYA_DEFAULT_EFFORT` | `medium` | 新 turn 起點（規則），也是續跑後的下限；須在階梯內 |
 | `LAYA_MODE` | `laya` | `laya`、`heuristic`（只用規則）、`llm`（小模型判官）、`off`（純轉送） |
 | `LAYA_DECISION_URL` | `http://127.0.0.1:8100/api/alpha/decisions` | laya-deploy Decisions API |
-| `LAYA_DECISION_MODEL` | `english` | laya checkpoint（`english`、`multilingual`、`auto`…）；實測 english 讀中文亦可 |
+| `LAYA_DECISION_MODEL` | `multilingual` | laya checkpoint（`multilingual`、`english`、`auto`）；也是自動啟動時預先載入者 |
+| `LAYA_AUTOSTART` | `on` | serve 時若本機 laya 沒在跑就啟動它 |
+| `LAYA_DEPLOY_DIR` | `~/.laya-gpt/laya-deploy`（或 `setup --dir` 記住的路徑） | laya-deploy checkout |
+| `LAYA_DEPLOY_PYTHON` | checkout 的 `.venv` Python | 改用其他 Python 啟動 laya-deploy |
 | `LAYA_API_KEY` | — | laya-deploy 設了 `LAYA_DEPLOY_API_KEY` 時填同值 |
 | `LAYA_DECISION_TIMEOUT_MS` | `2000` | 單次 laya 決策逾時（至少 1）；逾時後暫停 laya 30 秒 |
 | `LAYA_MIN_CONFIDENCE` | `0.5` | laya 最高機率低於此值即棄權，改用規則 |
@@ -203,7 +221,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 
 ## 限制與未驗證事項
 
-- **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；Codex 桌面版（`install --global`）未實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
+- **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；Codex 桌面版（`install --global`）未實測；`laya-gpt setup` 的全新安裝路徑（git clone＋uv sync 約 3 GB）未實跑，自動啟動／停止則已以既有 checkout 實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
 - laya 實測案例僅 29 則，皆為短句；長篇、混雜程式碼的收尾文字之準確度未量測。請以 `laya-gpt stats` 與 `decisions.jsonl` 在自身工作量觀察，必要時調 `LAYA_CONTINUE_THRESHOLD`、`LAYA_MIN_CONFIDENCE`。
 - 困難需求 laya 常信心不足而棄權（實測 0.37–0.40），此時由關鍵字規則決定。
 - 回傳給客戶端的 `usage` 只含最後一個回應；續跑那一代的 tokens 也算在上游帳單裡。
@@ -224,3 +242,4 @@ node scripts/laya-eval.mjs        # 需執行中的 laya：量測 effort 與停�
 | v0.1.0 | 2026-10-29 | 初始建立（衍生自 jev-gpt 871082f）：決策改由本機 laya（decision mode、choice 問題、規則把關）、預設 GPT-6.1 Terra medium、laya 選 low～xhigh、續跑上限 5、第一人稱承諾規則、CLI `laya-gpt`（埠 8790、profile `layagpt`） | 全部 |
 | v0.1.1 | 2026-10-29 | 依獨立審查修正：句尾條件式提議（"I'll add docs if you want"、「你想要的話我會改」）不再算承諾；承諾規則改為有界視窗（避免長文字二次方耗時）；laya 逾時後暫停 30 秒；`LAYA_DECISION_TIMEOUT_MS` 須 ≥ 1；README 更正 | `longtask.js`、`decisions.js`、`config.js`、README |
 | v0.2.0 | 2026-10-29 | `install --global`：改寫 `config.toml`（可逆、自動備份）讓 Codex 桌面版／IDE 擴充也經過 proxy；新增 `uninstall` | `bin/laya.js`、`src/codexconfig.js`、README |
+| v0.3.0 | 2026-10-29 | 整合 laya-deploy：`laya-gpt setup` 安裝、`serve` 自動啟動（預載所用 checkpoint）、`stop` 一併停止、`status` 顯示 laya；預設 checkpoint 改為 multilingual；停止判斷加「end 確定已完成則忽略 work」把關 | `src/layaserver.js`、`bin/laya.js`、`src/config.js`、`src/decisions.js`、README |

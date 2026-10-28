@@ -5,7 +5,7 @@ import { layaDecide, layaStopCheck, combineEffort } from '../src/decisions.js';
 import { assess } from '../src/policy.js';
 
 const url = process.argv[2] || 'http://127.0.0.1:8100/api/alpha/decisions';
-const model = process.argv[3] || 'english';
+const model = process.argv[3] || 'multilingual';
 const LADDER = ['low', 'medium', 'high', 'xhigh'];
 const opts = { url, model, timeoutMs: 60000, ladder: LADDER, minConfidence: 0.5 };
 const step = (kind, command, failed) => ({ kind, command, failed });

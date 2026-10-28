@@ -142,6 +142,11 @@ test('layaStopCheck: laya reads the closing text, and the rules still catch a pe
     answers = stopAnswers({ will_continue: 0.15, done: 0.7, needs_user: 0.15 }, { in_progress: 0.78, complete: 0.22 });
     assert.equal((await layaStopCheck(turn, null, 'Parser rewritten. Remaining: lexer, docs.', opts(url))).unfinished, 0.78);
 
+    // A finished summary: "end" is sure it says done, so "work"'s in progress is ignored.
+    answers = stopAnswers({ will_continue: 0.005, done: 0.99, needs_user: 0.005 }, { in_progress: 0.63, complete: 0.37 });
+    // (This turn ends on a failing step, so the rules' own 0.5 is what remains.)
+    assert.equal((await layaStopCheck(turn, null, 'Summary: rewrote the lexer, added 12 tests (all pass).', opts(url))).unfinished, 0.5);
+
     // laya says done, but the agent asked whether to go on: the rules' 0.75 stands.
     answers = stopAnswers({ will_continue: 0.2, done: 0.7, needs_user: 0.1 }, { in_progress: 0.3, complete: 0.7 });
     const asked = await layaStopCheck(turn, null, 'Two modules done. Would you like me to continue with the rest?', opts(url));
@@ -196,7 +201,7 @@ test('config: laya is the default mode and needs no key; the local server is the
   const config = loadConfig({});
   assert.deepEqual(
     [config.mode, config.decisionUrl, config.decisionModel, config.decisionKey, config.decisionTimeoutMs, config.minConfidence],
-    ['laya', 'http://127.0.0.1:8100/api/alpha/decisions', 'english', '', 2000, 0.5],
+    ['laya', 'http://127.0.0.1:8100/api/alpha/decisions', 'multilingual', '', 2000, 0.5],
   );
   assert.equal(loadConfig({ LAYA_API_KEY: 'k' }).decisionKey, 'k');
   assert.throws(() => loadConfig({ LAYA_MIN_CONFIDENCE: '2' }), /LAYA_MIN_CONFIDENCE/);

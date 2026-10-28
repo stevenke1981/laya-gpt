@@ -72,12 +72,14 @@ export function loadConfig(env = process.env) {
     judgeModel: env.LAYA_JUDGE_MODEL || '',
     judgeEffort: env.LAYA_JUDGE_EFFORT || 'low',
     judgeTimeoutMs: intEnv(env, 'LAYA_JUDGE_TIMEOUT_MS', 2500),
-    // laya-deploy's Decisions API; its checkpoint (english reads Chinese well enough here),
+    // laya-deploy's Decisions API; its checkpoint (multilingual by default: requests mix languages),
     // and the bearer token when the server sets LAYA_DEPLOY_API_KEY.
     decisionUrl: env.LAYA_DECISION_URL || 'http://127.0.0.1:8100/api/alpha/decisions',
-    decisionModel: env.LAYA_DECISION_MODEL || 'english',
+    decisionModel: env.LAYA_DECISION_MODEL || 'multilingual',
     decisionKey: env.LAYA_API_KEY || '',
     decisionTimeoutMs,
+    // Start the local laya server (laya-deploy) with the proxy when none answers.
+    layaAutostart: switchEnv(env, 'LAYA_AUTOSTART', 'on'),
     // laya is overconfident: below this top probability it abstains and the rules decide.
     minConfidence: probabilityEnv(env, 'LAYA_MIN_CONFIDENCE', 0.5),
     home,

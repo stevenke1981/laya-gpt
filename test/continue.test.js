@@ -281,7 +281,7 @@ test('laya decides the stop: a low score releases a turn the heuristic would res
       plan: null,
       text: PROMISE,
       opts: {
-        url: 'http://127.0.0.1:8100/api/alpha/decisions', apiKey: '', model: 'english', timeoutMs: 2000,
+        url: 'http://127.0.0.1:8100/api/alpha/decisions', apiKey: '', model: 'multilingual', timeoutMs: 2000,
       },
     }]);
   } finally {

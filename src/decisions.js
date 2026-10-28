@@ -13,6 +13,7 @@ const REPEAT_WINDOW = 6;
 const STUCK_HOLD_2 = 0.75;
 const STUCK_HOLD_1 = 0.5;
 const STUCK_RELEASE = 0.25;
+const SURE_DONE = 0.9;
 
 // New turn: laya reads the request itself, where rules only see keywords and length.
 const REQUEST_CRITERIA = {
@@ -243,7 +244,9 @@ export async function layaStopCheck(turn, plan, finalText, opts) {
   const reasons = [`laya ${end.choice} ${end.top.toFixed(2)}, in progress ${inProgress.toFixed(2)}`];
   // A request for the user is a legitimate stop: only laya's own "will continue" counts.
   if (end.choice === 'needs_user') return { unfinished: continuing, reasons, cost: null };
-  const judged = Math.max(continuing, inProgress);
+  // A summary that lists finished items reads as "in progress" to `work`; when `end` is
+  // sure the message says done, only the rules' own signals can still resume.
+  const judged = end.choice === 'done' && end.top >= SURE_DONE ? continuing : Math.max(continuing, inProgress);
   if (rules.unfinished > judged) return { unfinished: rules.unfinished, reasons: [...reasons, ...rules.reasons], cost: null };
   return { unfinished: judged, reasons, cost: null };
 }
