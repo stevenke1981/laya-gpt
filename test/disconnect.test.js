@@ -59,7 +59,7 @@ for (const continueTurns of ['on', 'off']) {
     const upstream = lingeringUpstream();
     const upstreamPort = await listen(upstream);
     const config = {
-      ...loadConfig({ LAYA_MODE: 'heuristic', LAYA_CONTINUE: continueTurns, OPENROUTER_API_KEY: '' }),
+      ...loadConfig({ LAYA_MODE: 'heuristic', LAYA_CONTINUE: continueTurns }),
       upstream: `http://127.0.0.1:${upstreamPort}/v1`,
     };
     const records = [];

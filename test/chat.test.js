@@ -69,7 +69,7 @@ async function chatHarness(reply) {
   });
   await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
   const logged = [];
-  const config = loadConfig({ LAYA_UPSTREAM: `http://127.0.0.1:${upstream.address().port}/v1`, LAYA_HOME: '.laya-test' });
+  const config = loadConfig({ LAYA_UPSTREAM: `http://127.0.0.1:${upstream.address().port}/v1`, LAYA_HOME: '.laya-test', LAYA_MODE: 'heuristic' });
   const { server, stats } = createProxy(config, { log: { write: (r) => logged.push(r) }, print: () => {} });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const post = (body) => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, {

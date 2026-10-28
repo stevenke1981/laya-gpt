@@ -11,7 +11,7 @@ const ROUTE = async () => ({ target: 0, hold: 0, release: true, stuck: 0, reason
 const NO_NETWORK = async () => {
   throw new Error('no network in tests');
 };
-const LAYA_KEY = { OPENROUTER_API_KEY: 'sk-or-test' };
+const LAYA_ON = { LAYA_MODE: 'laya' };
 const PROMISE = 'Next I will add tests.';
 const DONE = 'All tests pass and the work is done.';
 const USAGE = { input_tokens: 5, output_tokens: 9, output_tokens_details: { reasoning_tokens: 7 } };
@@ -264,7 +264,7 @@ test('no resume when the heuristic scores the stop below the threshold', async (
 test('laya decides the stop: a low score releases a turn the heuristic would resume', async () => {
   const calls = [];
   const h = await start({
-    env: LAYA_KEY,
+    env: LAYA_ON,
     deps: {
       stopCheckFn: async (turn, plan, text, opts) => {
         calls.push({ steps: turn.steps.length, plan, text, opts });
@@ -281,8 +281,7 @@ test('laya decides the stop: a low score releases a turn the heuristic would res
       plan: null,
       text: PROMISE,
       opts: {
-        url: 'https://openrouter.ai/api/alpha/decisions', apiKey: 'sk-or-test', model: 'typesafe/laya-1.14',
-        timeoutMs: 2500, sessionId: 'sess-1',
+        url: 'http://127.0.0.1:8100/api/alpha/decisions', apiKey: '', model: 'english', timeoutMs: 2000,
       },
     }]);
   } finally {
@@ -293,7 +292,7 @@ test('laya decides the stop: a low score releases a turn the heuristic would res
 test('a laya score above the threshold resumes with source laya', async () => {
   let judged = 0;
   const h = await start({
-    env: LAYA_KEY,
+    env: LAYA_ON,
     deps: {
       // Once above the threshold, then done: the second round is released.
       stopCheckFn: async () => (judged++ === 0
@@ -316,7 +315,7 @@ test('a laya score above the threshold resumes with source laya', async () => {
 
 test('a failed laya stop check falls back to the heuristic and says so', async () => {
   const h = await start({
-    env: LAYA_KEY,
+    env: LAYA_ON,
     deps: { stopCheckFn: async () => { throw new Error('timeout'); } },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))],
   });
@@ -422,7 +421,7 @@ test('two streams of one session that both reach the stop check cannot go over L
     else setTimeout(() => resolve(verdict), 500).unref();
   });
   const h = await start({
-    env: { ...LAYA_KEY, LAYA_MAX_CONTINUES: '1' },
+    env: { ...LAYA_ON, LAYA_MAX_CONTINUES: '1' },
     deps: { stopCheckFn },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', PROMISE)), sse(answer('r3', DONE))],
   });
@@ -440,7 +439,7 @@ test('two streams of one session that both reach the stop check cannot go over L
 
 test('a failed laya stop check is noted on one line of at most 80 characters', async () => {
   const h = await start({
-    env: LAYA_KEY,
+    env: LAYA_ON,
     deps: { stopCheckFn: async () => { throw new Error(`a\r\nb${'c'.repeat(100)}`); } },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))],
   });

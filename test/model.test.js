@@ -18,7 +18,7 @@ test('config: one model, default effort medium, long-task help on', () => {
   assert.deepEqual(config.ladder, ['low', 'medium', 'high', 'xhigh']);
   assert.equal(config.defaultEffort, 'medium');
   assert.equal(config.port, 8790);
-  assert.deepEqual([config.continueTurns, config.maxContinues, config.continueThreshold, config.nudge], [true, 3, 0.6, true]);
+  assert.deepEqual([config.continueTurns, config.maxContinues, config.continueThreshold, config.nudge], [true, 5, 0.6, true]);
   const custom = loadConfig({ LAYA_GPT_MODEL: 'gpt-x', LAYA_DEFAULT_EFFORT: 'HIGH', LAYA_CONTINUE: 'off', LAYA_MAX_CONTINUES: '1', LAYA_NUDGE: 'off' });
   assert.deepEqual([custom.model, custom.defaultEffort, custom.continueTurns, custom.maxContinues, custom.nudge], ['gpt-x', 'high', false, 1, false]);
   assert.throws(() => loadConfig({ LAYA_DEFAULT_EFFORT: 'max' }), /LAYA_DEFAULT_EFFORT must be one of LAYA_LEVELS/);
@@ -70,15 +70,24 @@ test('router: noteContinue climbs one rung per resume and stops at the top', () 
   assert.deepEqual(router.noteContinue('x'), { continues: 3, effort: 'xhigh' });
 });
 
-test('router: Laya scores a new turn against the default effort', async () => {
+const fail = (i) => [
+  { type: 'function_call', name: 'shell', call_id: `f${i}`, arguments: JSON.stringify({ command: ['bash', '-lc', `make t${i}`] }) },
+  { type: 'function_call_output', call_id: `f${i}`, output: 'Exit code: 2\nOutput:\nboom' },
+];
+
+test('router: laya leads a new turn but inside a turn it may only raise the effort', async () => {
   const seen = [];
   const decideFn = async (turn, opts) => {
-    seen.push(opts.currentEffort);
-    return { target: 0, hold: 0, release: true, stuck: 0, reasons: ['laya'], cost: 0 };
+    seen.push([turn.steps.length, opts.url, opts.model, opts.minConfidence]);
+    return { target: 1, hold: 0, release: false, stuck: null, reasons: ['laya medium 0.80'], cost: null };
   };
-  const router = createRouter(loadConfig({ OPENROUTER_API_KEY: 'k' }), { decideFn });
-  const input = [userMsg('hello there')];
-  assert.equal((await route(router, input)).effort, 'low');
-  await route(router, [...input, ...ok(1)]);
-  assert.deepEqual(seen, ['medium', 'low']);
+  const router = createRouter(loadConfig({}), { decideFn });
+  // The rules would start this hard request at high; laya reads it and picks medium.
+  const d = await route(router, [userMsg('refactor the auth module')]);
+  assert.deepEqual([d.effort, d.source], ['medium', 'laya']);
+  // Three failures in a row: the rules escalate to xhigh and laya's medium cannot lower it.
+  const stuck = await router.route({}, 's2', null, parseTurn([userMsg('fix it'), ...fail(1), ...fail(2), ...fail(3)]));
+  assert.equal(stuck.effort, 'xhigh');
+  assert.match(stuck.reasons.join(';'), /3 failures in a row;laya medium 0.80/);
+  assert.deepEqual(seen[0], [0, 'http://127.0.0.1:8100/api/alpha/decisions', 'english', 0.5]);
 });

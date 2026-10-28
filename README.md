@@ -1,122 +1,138 @@
-# jev-gpt — 單一 GPT 模型、Jev 決定 effort、長任務續跑
+# laya-gpt — 單一 GPT 模型、本機 laya 決定 effort、長任務不亂停
 
-> 只用一個模型（預設 GPT-6.1 Terra），每次 generation 由 Jev 在 low～xhigh 之間決定 reasoning effort，
+> 只用一個模型（預設 GPT-6.1 Terra），每次 generation 由**本機 laya** 在 low～xhigh 之間決定 reasoning effort（新 turn 預設 medium），
 > 並在模型「話說到一半就收工」時把任務接回來做完。
 
-本專案衍生自 [jev-sol-terra](https://github.com/stevenke1981/jev-sol-terra)（615dac7）。差異：
+本專案衍生自 [jev-gpt](https://github.com/stevenke1981/jev-gpt)（871082f）。差異：
 
-| | jev-sol-terra | jev-gpt |
+| | jev-gpt | laya-gpt |
 |---|---|---|
-| 模型 | Terra／Sol 逐代切換 | 只用 `gpt-6.1-terra`（`JEV_GPT_MODEL` 可改） |
-| effort | low～xhigh | low～xhigh，**新 turn 預設 medium** |
-| 長任務 | — | 計畫提醒（nudge）＋提早收工自動續跑（resume） |
-| 預設埠／home／Codex profile | 8788／`~/.jev-sol-terra`／`jevst` | **8789**／`~/.jev-gpt`／`jevgpt` |
+| 決策模型 | OpenRouter 上的 `typesafe/jev-1.14`（需金鑰、按次計費） | **本機 [laya-deploy](https://github.com/stevenke1981/laya-deploy)**（`127.0.0.1:8100`，免金鑰，約 40–200 ms） |
+| 問法 | `score`／`noul`，state 為整段軌跡 | **laya decision mode**：state 只放一句被判斷的主體、全用 `choice`、無 catch-all、門檻由程式持有 |
+| 信任方式 | 信心 ≥ 0.3 即採用 | **laya 受規則把關**：信心 < 0.5 棄權改用規則；turn 中 laya 只能調高 effort；停止判斷與規則取大 |
+| 長任務 | 計畫提醒＋續跑（上限 3） | 同上，**上限 5**，另加「第一人稱承諾工作」規則（I will fix…／我會再修…） |
+| 預設埠／home／Codex profile | 8789／`~/.jev-gpt`／`jevgpt` | **8790**／`~/.laya-gpt`／`layagpt` |
 
-三者（jev-effort、jev-sol-terra、jev-gpt）可同時執行。
+jev-gpt 與 laya-gpt 可同時執行。
+
+## 先啟動 laya
+
+```powershell
+cd D:\laya-deploy
+uv run laya-deploy serve                       # 或 scripts\start-server.ps1
+curl.exe -s http://127.0.0.1:8100/health       # {"status":"ok",...}
+```
+
+laya 未啟動時 laya-gpt 照常運作：每次決策連線失敗即改用規則（`source` 會寫 `heuristic (laya failed: …)`），不擋住客戶端。checkpoint 第一次載入約 40 秒，期間的決策會逾時改用規則。
 
 ## Effort 如何決定
 
-proxy 位於 Codex（或 Chat Completions 客戶端）與上游之間，每次 generation 前讀取本輪軌跡（工具呼叫與成敗），決定 effort：
+proxy 位於 Codex（或 Chat Completions 客戶端）與上游之間，每次 generation 前讀取本輪軌跡，向 laya 問一題（state 只有一句話）：
 
-- **新 turn**：預設 `medium`（`JEV_DEFAULT_EFFORT`）。招呼語 → `low`；困難程式（設計、重構、除錯、根因…）、深入問題（原理、分析、比較…）或超過 600 字的需求 → 預設再高一階（`high`）。
-- **turn 中**：讀檔、列目錄、建置成功等例行步驟 → `low`；剛改完程式、累積多次讀檔待綜合 → `medium`；連續失敗、重複同一個失敗指令 → 升到 `high`／`xhigh`，並鎖定數步；恢復成功後逐級回落。
-- **jev 模式（有 `OPENROUTER_API_KEY` 時預設）**：由 OpenRouter 上的 [`typesafe/jev-1.14`](https://openrouter.ai/typesafe/jev-1.14) 以 Decisions API 回答 `effort`（score）與 `stuck`（noul）。新 turn 送出的 `current_effort` 為預設 effort。信心不足、逾時或錯誤時改用本地規則，不擋住客戶端。
-- 一旦本輪被續跑過（見下節），之後的 effort 不低於預設值：低 effort 正是模型偷懶收工的地方。
+| 時機 | state | 問題（`choice`，選項即 effort 階梯） | 把關 |
+|---|---|---|---|
+| 新 turn | `{"request": "<使用者需求前 800 字>"}` | 這個需求要多少推理？low＝招呼／簡單問題、medium＝一般程式工作、high＝設計／跨模組重構／除錯根因、xhigh＝系統重設計／久攻不下的安全或並行問題 | laya 主導；最高機率 < 0.5 則棄權改用規則 |
+| turn 中 | `{"last_step": "ran the tests or build, it failed; 2 failures in a row; the same failing command was repeated"}` | 下一步要多少推理？＋是否卡住（`stuck`／`progressing`） | laya **只能調高**：與規則取較高者，同級時沿用規則（含 hold）。laya 不擅長數失敗次數，故規則的升級永遠成立 |
 
-改寫範圍：只改 effort（Responses 的 `reasoning.effort`；Chat 的 `reasoning_effort` 或 `reasoning.effort`），客戶端 model 為 `jev-auto`／`auto` 時另把 `model` 改成設定的模型 id（OpenRouter 上為 `openai/gpt-6.1-terra`）。`instructions`、`tools` 與既有 `input` 不變，prompt cache 前綴維持命中；長任務協助只在**請求末端**附加訊息。
+`last_step` 由程式把數字轉成少數固定片語（first failure／2 failures in a row／4 or more failures in a row／read 5 files since the last edit…），相同情境問相同問題。
 
-## 長任務協助
+規則（`src/policy.js`，laya 棄權或失敗時使用，也是 turn 中的下限）：新 turn 預設 medium，招呼 → low，困難／深入／超過 600 字 → high；turn 中例行步驟 → low，剛改程式或累積讀檔 → medium，連續失敗 → high／xhigh 並鎖定數步。一旦本輪被續跑過，之後 effort 不低於預設值。
 
-GPT-6.1 Terra 在長任務中常提早結束 turn：寫個摘要、說「接下來我會…」、或問「要我繼續嗎？」，但工作其實沒做完。jev-gpt 用兩種方式協助：
+改寫範圍：只改 effort（Responses 的 `reasoning.effort`；Chat 的 `reasoning_effort` 或 `reasoning.effort`），客戶端 model 為 `laya-auto`／`auto` 時另把 `model` 改成設定的模型 id。`instructions`、`tools` 與既有 `input` 不變，prompt cache 前綴維持命中；長任務協助只在**請求末端**附加訊息。
 
-### 1. 計畫提醒（nudge，`JEV_NUDGE=on`）
+## 長任務協助：不讓 GPT-6.1 Terra 亂停
 
-若本輪 agent 的計畫還有未完成步驟，每次 generation 前在請求末端附加一則提醒（Responses 為 `developer` 訊息，Chat 為 `system` 訊息）：已完成幾步、還剩哪些步驟、全部做完並驗證前不要收工、不要停下來問是否繼續。
+GPT-6.1 Terra 在長任務中常提早結束 turn：寫個摘要、說「接下來我會…」、或問「要我繼續嗎？」，但工作其實沒做完。
 
-提醒與續跑都只作用於「被路由」的請求（帶 `reasoning` 或 model 為 `jev-auto`／`auto`），`JEV_MODE=off`（純轉送）時兩者皆關閉。續跑請求不另加新提醒，但原請求裡的提醒仍在歷史中。
+### 1. 計畫提醒（nudge，`LAYA_NUDGE=on`）
 
-計畫來源：Codex 的 `update_plan` 工具（`plan[].step/status`，Responses 與 Chat 皆讀）；opencode 類的 `todowrite`／`TodoWrite`（`todos[].content/status`）只在 Chat 路徑讀取。
+本輪計畫（Codex `update_plan`；Chat 另讀 `todowrite`／`TodoWrite`）還有未完成步驟時，每次 generation 前在請求末端附加提醒：已完成幾步、還剩哪些、全部做完並驗證前不要收工、不要停下來問是否繼續。
 
-### 2. 提早收工自動續跑（resume，`JEV_CONTINUE=on`）
+### 2. 提早收工自動續跑（resume，`LAYA_CONTINUE=on`）
 
-適用於串流的 Responses 請求（Codex）。proxy 暫扣上游最後的 `response.completed` 事件，判斷這一代是否「結束了 turn 但工作未完成」：
+適用於串流的 Responses 請求（Codex）。proxy 暫扣上游最後的 `response.completed`，若這一代沒有工具呼叫（要把控制權交還使用者）、本輪做過事或有計畫、續跑未達 `LAYA_MAX_CONTINUES`（預設 5），且 `unfinished` ≥ `LAYA_CONTINUE_THRESHOLD`（預設 0.6），就立刻帶著原請求＋剛才的輸出＋一則 `[laya]` developer 訊息再送一次，effort 提高一階（至少為預設值），新事件接在同一條串流上送回 Codex。
 
-1. 這一代的輸出沒有任何工具呼叫（即模型要把控制權交還使用者）；
-2. 本輪至少做過一個工具步驟或有計畫（純問答從不續跑）；
-3. 本輪續跑次數未達 `JEV_MAX_CONTINUES`（預設 3）；
-4. 停止判斷的 `unfinished` ≥ `JEV_CONTINUE_THRESHOLD`（預設 0.6）。
+停止判斷（laya 模式，`src/decisions.js` 的 `layaStopCheck`）：
 
-全部成立時，proxy 立刻再送一個請求給上游：原請求＋剛才的輸出＋一則 `[jev]` developer 訊息（「你結束了 turn 但任務未完成，現在繼續…」），effort 提高一階（至少為預設值）。新回應的事件接在同一條串流上送回 Codex（不重送 `response.created`），所以 Codex 看到的是同一個 turn 繼續工作。不續跑時，暫扣的事件原樣放行。
+1. **硬規則先決，不問 laya**：本輪沒做事 → 0；向使用者索取只有他有的東西（API key、密碼、請提供、請先登入、哪一個…）→ 0.1；計畫有未完成步驟 → 0.9。
+2. 否則把**收尾文字末 500 字**當 state（`{"closing": "…"}`），一次問兩題：
+   - `end`：`will_continue`（打算或提議繼續同一任務）／`done`（說任務完成）／`needs_user`（要金鑰、密碼、登入或只有使用者能做的決定）
+   - `work`：`in_progress`（部分完成、還有剩）／`complete`（全部完成並驗證）
+3. `end` 選 `needs_user` → `unfinished` = P(will_continue)（合理停下，規則不加碼）；否則 `unfinished` = max(P(will_continue), P(in_progress), 規則分數)。規則分數：徵求許可的問句（would you like me to…?、要我…嗎）或第一人稱承諾（next I'll、I will fix…、接下來我會、我會再修…）0.75；最後一步失敗 0.5；其餘 0.1。「if you want, I'll add docs」「如果你需要，我會補上文件」這類提議不算。
 
-停止判斷：
+laya 失敗時只用規則。`heuristic`／`llm` 模式只用規則；`off` 不續跑。
 
-| 模式 | 判斷方式 |
-|---|---|
-| jev | Jev Decisions API 問 `unfinished`（noul）：「agent 剛結束 turn，是否在不需使用者輸入的情況下提早停了？」state 含本輪軌跡、最後訊息（前 2000 字）與計畫。失敗時改用規則 |
-| heuristic／llm | 規則（先命中者優先）：沒做事 0；向使用者索取資訊（your API key、please provide/confirm、請提供、請先登入、哪一個…）0.1；計畫有未完成步驟 0.9；直接問句徵求許可（would you like me to…?、shall I…?、要我…嗎）或第一人稱預告（next I'll、I still need to、接下來我會、尚未完成）0.75；最後一步失敗 0.5；其餘 0.1。「if you want me to…, let me know」、「下一步建議…」、「TODO」這類收尾語不觸發續跑 |
-| off | 不續跑 |
+### 實測（`node scripts/laya-eval.mjs`，english checkpoint、RTX 3060 Ti）
+
+| 項目 | 結果 | 說明 |
+|---|---|---|
+| 新 turn effort | 9/9 | 招呼、一般工作由 laya 判定（中英文皆對）；三個困難需求 laya 信心 0.37–0.40 而棄權，由規則判為 high |
+| turn 中 effort | 6/7 | 唯一不同：第一次失敗 laya 給 high（預期 medium）——laya 只能調高，屬偏保守 |
+| 停止判斷 | 13/13 | 含中英文「完成」「索取金鑰」「接下來我會」「要我繼續嗎」「Remaining: …」「I will fix those…」 |
+
+另以真 proxy＋真 laya＋模擬上游端到端實測：模型回「前兩個模組已遷移完成，剩下三個模組我之後再處理。」（規則未命中）→ laya `in_progress 0.61` → 自動續跑一次、effort LOW → MEDIUM，客戶端只看到一個完整 turn。
 
 終端機輸出範例：
 
 ```
-Jev  MEDIUM → LOW  ✓ APPLIED
-     Step 6 · next 1 generation(s) · 512 ms · jev score 0.12 (conf 0.95), stuck 0.04
-Jev  RESUME #1 → HIGH  ✓ APPLIED
-     Step 6 · unfinished 0.88 · jev · jev unfinished 0.88
+Laya  LOW  ✓ APPLIED
+     Step 2 · next 1 generation(s) · 215 ms · routine verify; laya low 0.52; stuck 0.20
+Laya  RESUME #1 → MEDIUM  ✓ APPLIED
+     Step 2 · unfinished 0.61 · laya · laya done 0.76, in progress 0.61
 ```
 
 ## 安裝與使用
 
-需求：Node.js ≥ 22.15（零依賴）、Codex CLI，或任一 Chat Completions 客戶端。
+需求：Node.js ≥ 22.15（零依賴）、Codex CLI 或任一 Chat Completions 客戶端；本機 laya-deploy（選用但建議）。
 
 ```powershell
-git clone https://github.com/stevenke1981/jev-gpt.git
-cd jev-gpt                 # 一定要在這個資料夾執行 npm link
-npm link                   # 註冊全域指令 jev-gpt（或直接 node bin/jev.js ...）
-jev-gpt --version
-jev-gpt install            # 寫入 $CODEX_HOME/jevgpt.config.toml（預設 ~/.codex）
+git clone https://github.com/stevenke1981/laya-gpt.git
+cd laya-gpt                # 一定要在這個資料夾執行 npm link
+npm link                   # 註冊全域指令 laya-gpt（或直接 node bin/laya.js ...）
+laya-gpt --version
+laya-gpt install           # 寫入 $CODEX_HOME/layagpt.config.toml（預設 ~/.codex）
 ```
 
-`install` 寫入的 Codex profile：`model = "gpt-6.1-terra"`、`model_reasoning_effort = "medium"`、`jevgpt` provider 指向 `http://127.0.0.1:8789/v1`、`wire_api = "responses"`、`requires_openai_auth = true`（沿用 Codex 既有登入）。檔案若存在且不是本工具寫入的，會拒絕覆寫，需加 `--force`。
+`install` 寫入的 Codex profile：`model = "gpt-6.1-terra"`、`model_reasoning_effort = "medium"`、`layagpt` provider 指向 `http://127.0.0.1:8790/v1`、`wire_api = "responses"`、`requires_openai_auth = true`（沿用 Codex 既有登入）。檔案若存在且不是本工具寫入的，會拒絕覆寫，需加 `--force`。
 
 ```powershell
-# A. 一鍵：背景啟動 proxy，再執行 codex -p jevgpt
-jev-gpt codex
-jev-gpt codex exec "implement the plan in TODO.md and make the tests pass"
+# A. 一鍵：背景啟動 proxy，再執行 codex -p layagpt
+laya-gpt codex
+laya-gpt codex exec "implement the plan in TODO.md and make the tests pass"
 
 # B. 即時看決策：開兩個視窗
-jev-gpt serve              # 視窗 1
-codex -p jevgpt            # 視窗 2
+laya-gpt serve             # 視窗 1
+codex -p layagpt           # 視窗 2
 ```
 
 | 指令 | 用途 |
 |---|---|
-| `jev-gpt serve` | 前景執行 proxy（預設 `127.0.0.1:8789`） |
-| `jev-gpt install [--force]` | 寫入 `jevgpt` profile |
-| `jev-gpt codex [args...]` | 必要時啟動 proxy，再執行 `codex -p jevgpt [args...]` |
-| `jev-gpt tail` | 即時追蹤決策（讀 `decisions.jsonl`） |
-| `jev-gpt stats` | 依 effort 分組統計 generation、reasoning tokens 與續跑次數 |
-| `jev-gpt status` | 顯示執行中 proxy 的版本；過舊或未執行時 exit 1 |
-| `jev-gpt stop` | 停止執行中的 proxy（只停 `app` 為 `jev-gpt` 者） |
-| `jev-gpt --version` | 磁碟上程式碼的版本與 build |
+| `laya-gpt serve` | 前景執行 proxy（預設 `127.0.0.1:8790`） |
+| `laya-gpt install [--force]` | 寫入 `layagpt` profile |
+| `laya-gpt codex [args...]` | 必要時啟動 proxy，再執行 `codex -p layagpt [args...]` |
+| `laya-gpt tail` | 即時追蹤決策（讀 `decisions.jsonl`） |
+| `laya-gpt stats` | 依 effort 分組統計 generation、reasoning tokens 與續跑次數 |
+| `laya-gpt status` | 顯示執行中 proxy 的版本；過舊或未執行時 exit 1 |
+| `laya-gpt stop` | 停止執行中的 proxy（只停 `app` 為 `laya-gpt` 者） |
+| `laya-gpt --version` | 磁碟上程式碼的版本與 build |
 
-**更新後請重啟 proxy**（`git pull` 後 `jev-gpt stop`）。`/jev/health` 回報 `app`、`version`、`build`、`pid`、`startedAt`、`mode`、`ladder` 與 `stats`（含 `byEffort`、`continued`、`nudged`；`continued` 只計成功送出的續跑，續跑上限則以嘗試次數計）。`decisions.jsonl` 每筆另有 `nudged: true` 與 `continues: [{n, effort, unfinished, source, reasons}]`（有發生時）。
+**更新後請重啟 proxy**（`git pull` 後 `laya-gpt stop`）。`/laya/health` 回報 `app`、`version`、`build`、`pid`、`startedAt`、`mode`、`ladder` 與 `stats`（含 `byEffort`、`continued`、`nudged`）。`decisions.jsonl` 每筆另有 `nudged: true` 與 `continues: [{n, effort, unfinished, source, reasons}]`（有發生時）。
 
-**上游與憑證**：`JEV_UPSTREAM` 強制指定；ChatGPT 登入（JWT 或 `chatgpt-account-id`）→ `chatgpt.com/backend-api/codex`；`sk-or-` 金鑰 → `openrouter.ai/api/v1`；其他 → `api.openai.com/v1`。proxy 不寫入任何憑證到記錄。
+**上游與憑證**：`LAYA_UPSTREAM` 強制指定；ChatGPT 登入（JWT 或 `chatgpt-account-id`）→ `chatgpt.com/backend-api/codex`；`sk-or-` 金鑰 → `openrouter.ai/api/v1`；其他 → `api.openai.com/v1`。proxy 不寫入任何憑證到記錄；送給 laya 的只有需求前 800 字、一句步驟描述或收尾文字末 500 字，且只送往本機。
 
 ## Chat Completions 客戶端
 
-proxy 也代理 `POST /v1/chat/completions`。opencode、aider、crush 把 base URL 指到 `http://127.0.0.1:8789/v1`，model 設 `jev-auto`。effort 路由與計畫提醒都適用；**自動續跑目前只支援 Responses 串流**（Codex），Chat 客戶端不續跑。
+proxy 也代理 `POST /v1/chat/completions`。opencode、aider、crush 把 base URL 指到 `http://127.0.0.1:8790/v1`，model 設 `laya-auto`。effort 路由與計畫提醒都適用；**自動續跑目前只支援 Responses 串流**（Codex）。
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "jev": {
+    "laya": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "jev-gpt (OpenRouter)",
-      "options": { "baseURL": "http://127.0.0.1:8789/v1", "apiKey": "{env:OPENROUTER_API_KEY}" },
-      "models": { "jev-auto": { "name": "GPT-6.1 Terra (Jev effort)" } }
+      "name": "laya-gpt (OpenRouter)",
+      "options": { "baseURL": "http://127.0.0.1:8790/v1", "apiKey": "{env:OPENROUTER_API_KEY}" },
+      "models": { "laya-auto": { "name": "GPT-6.1 Terra (laya effort)" } }
     }
   }
 }
@@ -124,30 +140,32 @@ proxy 也代理 `POST /v1/chat/completions`。opencode、aider、crush 把 base 
 
 ```powershell
 $env:OPENAI_API_KEY = $env:OPENROUTER_API_KEY
-aider --openai-api-base http://127.0.0.1:8789/v1 --model openai/jev-auto
+aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 ```
 
 ## 設定（環境變數）
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `JEV_PORT` / `JEV_HOST` | `8789` / `127.0.0.1` | 監聽位址 |
-| `JEV_GPT_MODEL` | `gpt-6.1-terra` | 唯一的上游模型 id |
-| `JEV_AUTO_MODELS` | `jev-auto,auto` | 會改寫成上述 id 的客戶端 model 名稱 |
-| `JEV_LEVELS` | `low,medium,high,xhigh` | effort 階梯 |
-| `JEV_DEFAULT_EFFORT` | `medium` | 新 turn 起點，也是續跑後的下限；須在階梯內 |
-| `JEV_MODE` | 有 `OPENROUTER_API_KEY` 時 `jev`，否則 `heuristic` | `jev`、`heuristic`、`llm`（小模型判官）、`off`（純轉送） |
-| `JEV_CONTINUE` | `on` | 提早收工自動續跑 |
-| `JEV_MAX_CONTINUES` | `3` | 每個 turn 最多續跑次數 |
-| `JEV_CONTINUE_THRESHOLD` | `0.6` | `unfinished` 達此值才續跑 |
-| `JEV_NUDGE` | `on` | 計畫有未完成步驟時附加提醒 |
-| `OPENROUTER_API_KEY` | — | `jev` 模式必填 |
-| `JEV_DECISION_MODEL` / `JEV_DECISION_URL` | `typesafe/jev-1.14` / OpenRouter Decisions API | Jev 決策 |
-| `JEV_MIN_CONFIDENCE` | `0.3` | Jev 信心低於此值改用規則 |
-| `JEV_JUDGE_MODEL` / `JEV_JUDGE_EFFORT` / `JEV_JUDGE_TIMEOUT_MS` | 請求模型 / `low` / `2500` | `llm` 判官；逾時也套用到 Jev 決策 |
-| `JEV_UPSTREAM`、`JEV_CHATGPT_UPSTREAM`、`JEV_API_UPSTREAM`、`JEV_OPENROUTER_UPSTREAM` | 依憑證 | 上游 |
-| `JEV_HOME` | `~/.jev-gpt` | `decisions.jsonl`、`proxy.log` |
-| `JEV_QUIET` | — | `1` 則不印決策 |
+| `LAYA_PORT` / `LAYA_HOST` | `8790` / `127.0.0.1` | 監聽位址 |
+| `LAYA_GPT_MODEL` | `gpt-6.1-terra` | 唯一的上游模型 id |
+| `LAYA_AUTO_MODELS` | `laya-auto,auto` | 會改寫成上述 id 的客戶端 model 名稱 |
+| `LAYA_LEVELS` | `low,medium,high,xhigh` | effort 階梯（亦即 laya 的選項） |
+| `LAYA_DEFAULT_EFFORT` | `medium` | 新 turn 起點（規則），也是續跑後的下限；須在階梯內 |
+| `LAYA_MODE` | `laya` | `laya`、`heuristic`（只用規則）、`llm`（小模型判官）、`off`（純轉送） |
+| `LAYA_DECISION_URL` | `http://127.0.0.1:8100/api/alpha/decisions` | laya-deploy Decisions API |
+| `LAYA_DECISION_MODEL` | `english` | laya checkpoint（`english`、`multilingual`、`auto`…）；實測 english 讀中文亦可 |
+| `LAYA_API_KEY` | — | laya-deploy 設了 `LAYA_DEPLOY_API_KEY` 時填同值 |
+| `LAYA_DECISION_TIMEOUT_MS` | `2000` | 單次 laya 決策逾時 |
+| `LAYA_MIN_CONFIDENCE` | `0.5` | laya 最高機率低於此值即棄權，改用規則 |
+| `LAYA_CONTINUE` | `on` | 提早收工自動續跑 |
+| `LAYA_MAX_CONTINUES` | `5` | 每個 turn 最多續跑次數 |
+| `LAYA_CONTINUE_THRESHOLD` | `0.6` | `unfinished` 達此值才續跑 |
+| `LAYA_NUDGE` | `on` | 計畫有未完成步驟時附加提醒 |
+| `LAYA_JUDGE_MODEL` / `LAYA_JUDGE_EFFORT` / `LAYA_JUDGE_TIMEOUT_MS` | 請求模型 / `low` / `2500` | `llm` 判官 |
+| `LAYA_UPSTREAM`、`LAYA_CHATGPT_UPSTREAM`、`LAYA_API_UPSTREAM`、`LAYA_OPENROUTER_UPSTREAM` | 依憑證 | 上游 |
+| `LAYA_HOME` | `~/.laya-gpt` | `decisions.jsonl`、`proxy.log` |
+| `LAYA_QUIET` | — | `1` 則不印決策 |
 | `CODEX_HOME` | `~/.codex` | `install` 寫入目錄 |
 
 ## 架構
@@ -155,35 +173,36 @@ aider --openai-api-base http://127.0.0.1:8789/v1 --model openai/jev-auto
 | 檔案 | 職責 |
 |---|---|
 | `src/config.js` | 環境變數與驗證 |
-| `src/policy.js` | 規則判斷 `assess()`（預設 effort 起點）、hysteresis `nextState()` |
+| `src/decisions.js` | laya 決策：`effortCall()`／`situation()`（state 與問題）、`layaDecide()`、`combineEffort()`（把關）、`layaStopCheck()` |
+| `src/policy.js` | 規則判斷 `assess()`、hysteresis `nextState()` |
 | `src/router.js` | 依 session 保存 effort 狀態與本輪續跑次數（`continuesOf`、`noteContinue`） |
-| `src/decisions.js` | Jev 決策：`jevDecide()`（effort）、`jevStopCheck()`（是否提早收工） |
 | `src/longtask.js` | 計畫解析 `turnPlan()`、`finalOutput()`、規則版停止判斷 `assessStop()`、提醒與續跑訊息 |
 | `src/splice.js` | SSE 事件切分、暫扣 `response.completed`、把續跑回應接在同一串流 |
 | `src/trajectory.js` / `src/chat.js` | Responses／Chat 軌跡解析 |
 | `src/judge.js` | 選用的 LLM 判官 |
-| `src/model.js` | 模型 id、`jev-auto` 別名、effort 對齊 |
-| `src/proxy.js` | HTTP proxy：解壓、改寫、提醒、續跑、usage、`/jev/health` |
+| `src/model.js` | 模型 id、`laya-auto` 別名、effort 對齊 |
+| `src/proxy.js` | HTTP proxy：解壓、改寫、提醒、續跑、usage、`/laya/health` |
 | `src/log.js` / `src/version.js` | 決策記錄與格式；版本與 build 指紋 |
-| `bin/jev.js` | CLI |
+| `bin/laya.js` | CLI |
+| `scripts/laya-eval.mjs` | 對執行中的 laya 量測上述問法（含把關） |
 
 ## 限制與未驗證事項
 
-- **未驗證**：Codex 以 ChatGPT 登入、對 `chatgpt.com/backend-api/codex` 的續跑串流尚未實測；Codex 是否完全接受「同一串流內第二個回應的事件」以本機模擬測試為準。
-- 續跑請求重放上一代的輸出（去掉 `id`／`status`，比照 Codex 自己送回的格式）；reasoning item 只在帶 `encrypted_content` 或 summary 時重放。
+- **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
+- laya 實測案例僅 29 則，皆為短句；長篇、混雜程式碼的收尾文字之準確度未量測。請以 `laya-gpt stats` 與 `decisions.jsonl` 在自身工作量觀察，必要時調 `LAYA_CONTINUE_THRESHOLD`、`LAYA_MIN_CONFIDENCE`。
+- 困難需求 laya 常信心不足而棄權（實測 0.37–0.40），此時由關鍵字規則決定。
 - 回傳給客戶端的 `usage` 只含最後一個回應；續跑那一代的 tokens 也算在上游帳單裡。
-- 規則版停止判斷是 regex 啟發式，可能誤判；每 turn 續跑上限與門檻可調，`JEV_CONTINUE=off` 可關閉。
 - Chat Completions 不續跑；Codex 的 websocket 傳輸不經過 proxy。
-- 省成本或完成率提升幅度請以 `jev-gpt stats` 於自身工作量量測。
 
 ## 測試
 
 ```powershell
-npm test     # node --test；不連網路，上游以本機 http.createServer 模擬
+npm test                          # node --test；不連網路，上游與 laya 皆以本機 http.createServer 模擬
+node scripts/laya-eval.mjs        # 需執行中的 laya：量測 effort 與停止判斷
 ```
 
 ## 變更歷史
 
 | 版本 | 日期 | 內容 | 影響範圍 |
 |------|------|------|----------|
-| v0.1.0 | 2026-10-28 | 初始建立（衍生自 jev-sol-terra 615dac7）：單一模型 GPT-6.1 Terra、Jev 決定 low～xhigh effort（新 turn 預設 medium）、計畫提醒、提早收工自動續跑、CLI `jev-gpt`（埠 8789、profile `jevgpt`） | 全部 |
+| v0.1.0 | 2026-10-29 | 初始建立（衍生自 jev-gpt 871082f）：決策改由本機 laya（decision mode、choice 問題、規則把關）、預設 GPT-6.1 Terra medium、laya 選 low～xhigh、續跑上限 5、第一人稱承諾規則、CLI `laya-gpt`（埠 8790、profile `layagpt`） | 全部 |

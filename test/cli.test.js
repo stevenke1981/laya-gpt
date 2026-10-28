@@ -167,7 +167,7 @@ test('stats groups decisions by effort in ladder order and counts resumed early 
   try {
     const res = await run(['stats'], { ...process.env, LAYA_HOME: home });
     assert.equal(res.code, 0, res.out);
-    assert.match(res.out, /^5 generations, 4 sessions, 1 routed by Laya \(\$0\.001000\), 3 early stops resumed/);
+    assert.match(res.out, /^5 generations, 4 sessions, 1 routed by laya, 3 early stops resumed/);
     assert.match(res.out, /low\s+2 gens\s+0 avg reasoning tok\s+30 output tok/);
     assert.match(res.out, /xhigh\s+1 gens\s+50 avg reasoning tok\s+100 output tok/);
     assert.match(res.out, /\n {2}-\s+1 gens/);
@@ -188,7 +188,7 @@ test('help names the laya-gpt commands, the variables and the port', async () =>
     assert.match(res.out, /laya-gpt serve/);
     assert.match(res.out, /codex -p layagpt/);
     for (const name of ['LAYA_GPT_MODEL (gpt-6.1-terra)', 'LAYA_DEFAULT_EFFORT (medium)', 'LAYA_CONTINUE (on|off)',
-      'LAYA_MAX_CONTINUES (3)', 'LAYA_NUDGE (on|off)', 'LAYA_PORT (8790)']) {
+      'LAYA_MAX_CONTINUES (5)', 'LAYA_NUDGE (on|off)', 'LAYA_PORT (8790)']) {
       assert.ok(res.out.includes(name), `help is missing ${name}`);
     }
     assert.match(res.out, /http:\/\/127\.0\.0\.1:8790\/v1, model laya-auto/);

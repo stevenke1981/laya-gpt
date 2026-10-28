@@ -34,11 +34,10 @@ function switchEnv(env, name, fallback) {
 
 export function loadConfig(env = process.env) {
   const home = env.LAYA_HOME || path.join(os.homedir(), '.laya-gpt');
-  const openrouterKey = env.OPENROUTER_API_KEY || '';
-  // With an OpenRouter key the TypeSafe Laya decision model routes by default.
-  const mode = (env.LAYA_MODE || (openrouterKey ? 'laya' : 'heuristic')).toLowerCase();
+  // The local laya server decides by default. It needs no key, and when it is down every
+  // decision falls back to the rules, so the default never blocks a client.
+  const mode = (env.LAYA_MODE || 'laya').toLowerCase();
   if (!['laya', 'heuristic', 'llm', 'off'].includes(mode)) throw new Error(`LAYA_MODE must be laya|heuristic|llm|off; got "${mode}"`);
-  if (mode === 'laya' && !openrouterKey) throw new Error('LAYA_MODE=laya needs OPENROUTER_API_KEY');
   const ladder = parseLadder(env.LAYA_LEVELS || 'low,medium,high,xhigh');
   const defaultEffort = (env.LAYA_DEFAULT_EFFORT || 'medium').trim().toLowerCase();
   if (!ladder.includes(defaultEffort)) {
@@ -58,7 +57,7 @@ export function loadConfig(env = process.env) {
     // Long-task help: resume a turn the model ended before the work was done, and remind it
     // of an unfinished plan before each generation.
     continueTurns: switchEnv(env, 'LAYA_CONTINUE', 'on'),
-    maxContinues: intEnv(env, 'LAYA_MAX_CONTINUES', 3),
+    maxContinues: intEnv(env, 'LAYA_MAX_CONTINUES', 5),
     continueThreshold: probabilityEnv(env, 'LAYA_CONTINUE_THRESHOLD', 0.6),
     nudge: switchEnv(env, 'LAYA_NUDGE', 'on'),
     mode,
@@ -70,10 +69,14 @@ export function loadConfig(env = process.env) {
     judgeModel: env.LAYA_JUDGE_MODEL || '',
     judgeEffort: env.LAYA_JUDGE_EFFORT || 'low',
     judgeTimeoutMs: intEnv(env, 'LAYA_JUDGE_TIMEOUT_MS', 2500),
-    openrouterKey,
-    decisionModel: env.LAYA_DECISION_MODEL || 'typesafe/laya-1.14',
-    decisionUrl: env.LAYA_DECISION_URL || 'https://openrouter.ai/api/alpha/decisions',
-    minConfidence: probabilityEnv(env, 'LAYA_MIN_CONFIDENCE', 0.3),
+    // laya-deploy's Decisions API; its checkpoint (english reads Chinese well enough here),
+    // and the bearer token when the server sets LAYA_DEPLOY_API_KEY.
+    decisionUrl: env.LAYA_DECISION_URL || 'http://127.0.0.1:8100/api/alpha/decisions',
+    decisionModel: env.LAYA_DECISION_MODEL || 'english',
+    decisionKey: env.LAYA_API_KEY || '',
+    decisionTimeoutMs: intEnv(env, 'LAYA_DECISION_TIMEOUT_MS', 2000),
+    // laya is overconfident: below this top probability it abstains and the rules decide.
+    minConfidence: probabilityEnv(env, 'LAYA_MIN_CONFIDENCE', 0.5),
     home,
     logFile: path.join(home, 'decisions.jsonl'),
     quiet: env.LAYA_QUIET === '1',

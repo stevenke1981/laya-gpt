@@ -1,7 +1,7 @@
 {
   "name": "laya-gpt",
   "version": "0.1.0",
-  "description": "Runs one GPT model (GPT-6.1 Terra), lets Laya pick the reasoning effort (low..xhigh) per generation, and resumes long tasks the model stops too early.",
+  "description": "Runs one GPT model (GPT-6.1 Terra), lets a local laya pick the reasoning effort (low..xhigh) per generation, and resumes long tasks the model stops too early.",
   "type": "module",
   "bin": {
     "laya-gpt": "bin/laya.js"

@@ -333,3 +333,22 @@ test('continueText: caps the listed open steps at five', () => {
   const text = continueText({ total: 8, done: 0, open: ['1', '2', '3', '4', '5', '6'] }, ['plan 0/8 done']);
   assert.match(text, /- 5\n- \.\.\.and 1 more\n/);
 });
+
+test('assessStop: a work verb promised in the first person counts, an offer does not', () => {
+  const edited = turn([{ kind: 'edit', command: 'apply_patch', failed: false }]);
+  for (const text of [
+    'The API handlers still use the old names; I will fix those and rerun the suite.',
+    "Schema updated. I'll update the handlers next.",
+    '我已更新 schema，我會再修 API handler 並重跑測試。',
+  ]) {
+    assert.deepEqual(assessStop(edited, null, text), { unfinished: 0.75, reasons: ['promises more work'] }, text);
+  }
+  for (const text of [
+    "Done. If you want, I'll add docs.",
+    'Done with the refactor. If you like, I will update the README too.',
+    'I will be happy to help further.',
+    '完成了。如果你需要，我會補上文件。',
+  ]) {
+    assert.deepEqual(assessStop(edited, null, text), { unfinished: 0.1, reasons: ['looks done'] }, text);
+  }
+});

@@ -226,17 +226,16 @@ export function createProxy(config, deps = {}) {
     if (sent.effort) stats.byEffort[sent.effort] = (stats.byEffort[sent.effort] ?? 0) + 1;
   }
 
-  // How unfinished a generation that ended the turn looks. Laya judges it in laya mode; when
-  // Laya fails, the heuristic decides instead, and `source` says which one did.
+  // How unfinished a generation that ended the turn looks. laya judges it in laya mode, gated
+  // by the stop rules; when laya fails, the rules decide alone, and `source` says which did.
   async function stopCheck(turn, plan, text, session) {
     if (config.mode !== 'laya') return { ...assessStop(turn, plan, text), source: 'heuristic' };
     try {
       const judged = await stopCheckFn(turn, plan, text, {
         url: config.decisionUrl,
-        apiKey: config.openrouterKey,
+        apiKey: config.decisionKey,
         model: config.decisionModel,
-        timeoutMs: config.judgeTimeoutMs,
-        sessionId: session,
+        timeoutMs: config.decisionTimeoutMs,
       });
       return { ...judged, source: 'laya' };
     } catch (err) {

@@ -33,7 +33,7 @@ async function harness(env = {}, deps = {}) {
   });
   const upPort = await listen(upstream);
   const logged = [];
-  const config = loadConfig({ LAYA_UPSTREAM: `http://127.0.0.1:${upPort}/base`, LAYA_HOME: '.laya-test', ...env });
+  const config = loadConfig({ LAYA_UPSTREAM: `http://127.0.0.1:${upPort}/base`, LAYA_HOME: '.laya-test', LAYA_MODE: 'heuristic', ...env });
   const { server, stats } = createProxy(config, { log: { write: (r) => logged.push(r) }, print: () => {}, ...deps });
   const port = await listen(server);
   const close = () => { server.close(); upstream.close(); };

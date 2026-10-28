@@ -1,9 +1,9 @@
-// Per-session effort routing: trajectory -> assessment (Laya, heuristic or judge) -> hysteresis.
+// Per-session effort routing: trajectory -> assessment (laya gated by rules, heuristic or judge) -> hysteresis.
 // The session state also remembers how often this turn was resumed after an early stop.
 import { parseTurn } from './trajectory.js';
 import { assess, nextState, isNewTurn } from './policy.js';
 import { judge } from './judge.js';
-import { layaDecide } from './decisions.js';
+import { layaDecide, combineEffort } from './decisions.js';
 
 const MAX_SESSIONS = 500;
 
@@ -18,22 +18,19 @@ export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } 
     if (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
   }
 
-  async function assessTurn(body, sessionKey, judgeTarget, turn, prev, step) {
+  async function assessTurn(body, judgeTarget, turn, step) {
     const heuristic = assess(turn, ladder, config.defaultEffort);
     if (config.mode === 'laya') {
       try {
         const d = await decideFn(turn, {
           url: config.decisionUrl,
-          apiKey: config.openrouterKey,
+          apiKey: config.decisionKey,
           model: config.decisionModel,
-          timeoutMs: config.judgeTimeoutMs,
+          timeoutMs: config.decisionTimeoutMs,
           ladder,
           minConfidence: config.minConfidence,
-          sessionId: sessionKey,
-          // A new turn starts from the default, so Laya scores against it.
-          currentEffort: prev && step > 1 ? ladder[prev.level] : config.defaultEffort,
         });
-        return { a: d, source: 'laya', cost: d.cost };
+        return { a: combineEffort(d, heuristic, turn.steps.length === 0), source: 'laya', cost: d.cost };
       } catch (err) {
         return { a: heuristic, source: `heuristic (laya failed: ${err.message})`, cost: null };
       }
@@ -68,7 +65,7 @@ export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } 
     const started = performance.now();
     const step = turn.steps.length + 1;
     const prev = sessions.get(sessionKey);
-    const { a, source, cost } = await assessTurn(body, sessionKey, judgeTarget, turn, prev, step);
+    const { a, source, cost } = await assessTurn(body, judgeTarget, turn, step);
     const fresh = isNewTurn(prev, step);
     let state = nextState(prev, a, step);
     const continues = fresh ? 0 : prev.continues ?? 0;

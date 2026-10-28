@@ -47,6 +47,10 @@ const PROMISE = [
   // Status phrases, the English counterpart of 尚未完成.
   /\bnot yet (?:done|implemented|finished)\b/i,
   /接下來我會|我還需要|我接著|尚未完成|還沒完成/,
+  // "I will fix those and rerun the suite": a work verb promised in the first person. An
+  // offer ("if you want, I'll add docs") closes finished work, so it does not count.
+  /(?<!\bif you (?:want|like|prefer)\b[^.!?\n]*)\bI(?:'ll|’ll| will) (?:fix|update|add|run|rerun|implement|finish|write|change|refactor|test|verify|migrate|clean up)\b/i,
+  /(?<!(?:如果|若)(?:你|您)?(?:需要|想要|願意)[^。！？\n]*)我(?:會|將)(?:再|接著|繼續)?(?:修|改|更新|補|跑|重跑|完成|實作|加上|測試|驗證)/,
 ];
 
 const NUDGE_FOOTER = 'Keep working through every remaining step and verify the result before you end your turn. '

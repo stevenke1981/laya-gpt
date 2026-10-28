@@ -33,7 +33,7 @@ test('compareBuild tells current, stale and pre-version proxies apart', () => {
 });
 
 test('/laya/health reports version, build, pid and start time', async () => {
-  const { server } = createProxy(loadConfig({ LAYA_HOME: '.laya-test' }), { log: { write() {} }, print: () => {} });
+  const { server } = createProxy(loadConfig({ LAYA_HOME: '.laya-test', LAYA_MODE: 'heuristic' }), { log: { write() {} }, print: () => {} });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const health = await (await fetch(`http://127.0.0.1:${server.address().port}/laya/health`)).json();
