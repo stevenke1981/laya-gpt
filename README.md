@@ -15,16 +15,33 @@
 
 jev-gpt 與 laya-gpt 可同時執行。
 
+## 快速開始（Windows PowerShell）
+
+先裝好 [Node.js](https://nodejs.org/) ≥ 22.15、`git`、[uv](https://docs.astral.sh/uv/)（`powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`）與 Codex CLI，然後：
+
+```powershell
+git clone https://github.com/stevenke1981/laya-gpt.git
+cd laya-gpt
+npm link                                 # ← 必做：把 laya-gpt 註冊成指令；沒做會出現「無法辨識 'laya-gpt' 詞彙」
+laya-gpt --version                       # 應顯示 laya-gpt v0.3.1
+laya-gpt setup                           # 安裝本機 laya（約 3 GB＋模型約 650 MB，預設放 ~\.laya-gpt\laya-deploy）
+#   想放其他磁碟：laya-gpt setup --dir E:\laya-deploy
+laya-gpt install                         # 寫入 Codex profile
+laya-gpt codex                           # 自動啟動 laya 與 proxy，再開 Codex
+```
+
+`npm link` 後仍找不到 `laya-gpt`：關掉並重開 PowerShell；仍不行就確認 `npm prefix -g` 顯示的資料夾在 PATH 裡。也可不註冊指令，直接執行 `node bin\laya.js <指令>`（例如 `node bin\laya.js setup`）。
+
 ## laya 由 laya-gpt 安裝與啟動
 
-laya 本身是 Python（torch＋laya），放在獨立的 [laya-deploy](https://github.com/stevenke1981/laya-deploy) checkout；laya-gpt 負責安裝、啟動、停止它，自己仍零依賴。
+laya 本身是 Python（torch＋laya），放在獨立的 [laya-deploy](https://github.com/stevenke1981/laya-deploy) checkout；laya-gpt 負責安裝、啟動、停止它，自己仍零依賴。以下指令需先完成 `npm link`（見「快速開始」）。
 
 ```powershell
 laya-gpt setup                          # 第一次：clone laya-deploy 到 ~/.laya-gpt/laya-deploy、uv sync（約 3 GB）、下載 multilingual（約 650 MB）
-laya-gpt setup --dir D:\laya-deploy     # 已有 checkout 時改用它（會記住此路徑）
+laya-gpt setup --dir E:\laya-deploy     # 指定安裝位置，或改用既有的 laya-deploy checkout（會記住此路徑）
 ```
 
-需要 `git` 與 [uv](https://docs.astral.sh/uv/)。之後 `laya-gpt serve`（或 `laya-gpt codex`）發現 8100 沒有 laya 時，會在背景以該 checkout 的 `.venv` Python 啟動 laya-deploy，並預先載入 laya-gpt 用的 checkpoint（`LAYA_DEPLOY_PRELOAD`），不等它載完——載入期間（約 10–40 秒）決策先用規則。`laya-gpt status` 顯示 laya 狀態；`laya-gpt stop` 會一併停掉**由 laya-gpt 啟動的** laya（手動啟動的不動）。`LAYA_AUTOSTART=off` 關閉自動啟動；`LAYA_DECISION_URL` 不是本機位址時也不會自動啟動。
+需要 `git` 與 [uv](https://docs.astral.sh/uv/)；`--dir` 指向的資料夾須不存在、為空，或已是 laya-deploy checkout。`setup` 可重複執行（已 clone 則略過，只再 `uv sync` 與確認模型已下載）。之後 `laya-gpt serve`（或 `laya-gpt codex`）發現 8100 沒有 laya 時，會在背景以該 checkout 的 `.venv` Python 啟動 laya-deploy，並預先載入 laya-gpt 用的 checkpoint（`LAYA_DEPLOY_PRELOAD`），不等它載完——載入期間（約 10–40 秒）決策先用規則。`laya-gpt status` 顯示 laya 狀態；`laya-gpt stop` 會一併停掉**由 laya-gpt 啟動的** laya（手動啟動的不動）。`LAYA_AUTOSTART=off` 關閉自動啟動；`LAYA_DECISION_URL` 不是本機位址時也不會自動啟動。
 
 laya 未啟動時 laya-gpt 照常運作：每次決策連線失敗即改用規則（`source` 會寫 `heuristic (laya failed: …)`），不擋住客戶端。laya 若卡住不回（例如 checkpoint 第一次載入約 40 秒），一次逾時（`LAYA_DECISION_TIMEOUT_MS`，2 秒）後暫停呼叫 laya 30 秒，期間直接用規則，不再每次等逾時。
 
@@ -96,12 +113,12 @@ Laya  RESUME #1 → MEDIUM  ✓ APPLIED
 
 ## 安裝與使用
 
-需求：Node.js ≥ 22.15（零依賴）、Codex CLI 或任一 Chat Completions 客戶端；本機 laya-deploy（選用但建議）。
+需求：Node.js ≥ 22.15（零依賴）、Codex CLI 或任一 Chat Completions 客戶端；本機 laya 需 `git` 與 `uv`（選用但建議）。
 
 ```powershell
 git clone https://github.com/stevenke1981/laya-gpt.git
 cd laya-gpt                # 一定要在這個資料夾執行 npm link
-npm link                   # 註冊全域指令 laya-gpt（或直接 node bin/laya.js ...）
+npm link                   # 必做：註冊全域指令 laya-gpt（或改用 node bin/laya.js ...）
 laya-gpt --version
 laya-gpt setup             # 安裝本機 laya（見上節；已有 laya-deploy 用 --dir）
 laya-gpt install           # 寫入 $CODEX_HOME/layagpt.config.toml（預設 ~/.codex）
@@ -243,3 +260,4 @@ node scripts/laya-eval.mjs        # 需執行中的 laya：量測 effort 與停�
 | v0.1.1 | 2026-10-29 | 依獨立審查修正：句尾條件式提議（"I'll add docs if you want"、「你想要的話我會改」）不再算承諾；承諾規則改為有界視窗（避免長文字二次方耗時）；laya 逾時後暫停 30 秒；`LAYA_DECISION_TIMEOUT_MS` 須 ≥ 1；README 更正 | `longtask.js`、`decisions.js`、`config.js`、README |
 | v0.2.0 | 2026-10-29 | `install --global`：改寫 `config.toml`（可逆、自動備份）讓 Codex 桌面版／IDE 擴充也經過 proxy；新增 `uninstall` | `bin/laya.js`、`src/codexconfig.js`、README |
 | v0.3.0 | 2026-10-29 | 整合 laya-deploy：`laya-gpt setup` 安裝、`serve` 自動啟動（預載所用 checkpoint）、`stop` 一併停止、`status` 顯示 laya；預設 checkpoint 改為 multilingual；停止判斷加「end 確定已完成則忽略 work」把關 | `src/layaserver.js`、`bin/laya.js`、`src/config.js`、`src/decisions.js`、README |
+| v0.3.1 | 2026-10-29 | README：新增「快速開始」，強調 clone 後須先 `npm link`、列出 git／uv 前置需求、`setup --dir` 指定安裝位置與指令找不到時的排解 | README |
