@@ -165,6 +165,8 @@ laya-gpt uninstall         # 還原
 
 **更新後請重啟 proxy**（`git pull` 後 `laya-gpt stop`）。`/laya/health` 回報 `app`、`version`、`build`、`pid`、`startedAt`、`mode`、`ladder` 與 `stats`（含 `byEffort`、`continued`、`nudged`）。`decisions.jsonl` 每筆另有 `nudged: true` 與 `continues: [{n, effort, unfinished, source, reasons}]`（有發生時）。
 
+`laya-gpt serve` 在已有新版 proxy 執行時追蹤 `events.jsonl`：決策選定後立即顯示 Laya 與規則的建議、採用來源及工作階段調整；完成或失敗事件以同一 ID 對照。`decisions.jsonl` 仍保存完成後的統計紀錄。舊 proxy 使用原有紀錄檔，且只在回應後顯示。
+
 **上游與憑證**：`LAYA_UPSTREAM` 強制指定；ChatGPT 登入（JWT 或 `chatgpt-account-id`）→ `chatgpt.com/backend-api/codex`；`sk-or-` 金鑰 → `openrouter.ai/api/v1`；其他 → `api.openai.com/v1`。proxy 不寫入任何憑證到記錄；送給 laya 的只有需求前 800 字、一句步驟描述或收尾文字末 500 字，預設送往本機 laya；若改 `LAYA_DECISION_URL` 指向他處，這些文字與 `LAYA_API_KEY` 也會送往該處。
 
 ## Chat Completions 客戶端

@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, EFFORTS } from '../src/config.js';
@@ -184,9 +185,9 @@ function serve(config) {
       const running = await probe(config);
       if (isOurProxy(running)) {
         console.log(`${NAME}: ${compareBuild(running).message}`);
-        console.log('Following decisions from the configured LAYA_HOME; records appear after each response completes.');
+        console.log('Following decisions from the configured LAYA_HOME. Older proxies record decisions after responses complete.');
         console.log('Send requests through laya-gpt codex or codex -p layagpt; Ctrl+C stops viewing only.');
-        return tail(config);
+        return tail(config, running.eventStream === true);
       }
     }
     const hint = err.code === 'EADDRINUSE' ? await portOwnerHint(config) : '';
@@ -302,25 +303,34 @@ async function stop(config) {
   process.exitCode = 1;
 }
 
-function tail(config) {
-  let size = fs.existsSync(config.logFile) ? fs.statSync(config.logFile).size : 0;
-  console.log(`following ${config.logFile} (Ctrl+C to stop)`);
-  fs.mkdirSync(path.dirname(config.logFile), { recursive: true });
-  fs.watchFile(config.logFile, { interval: 300 }, (cur) => {
+function tail(config, live = fs.existsSync(config.eventFile)) {
+  const file = live ? config.eventFile : config.logFile;
+  let size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+  let pending = '';
+  let decoder = new StringDecoder('utf8');
+  console.log(`following ${file} (Ctrl+C to stop)`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.watchFile(file, { interval: 300 }, (cur) => {
     if (cur.size <= size) {
+      if (cur.size < size) { pending = ''; decoder = new StringDecoder('utf8'); }
       size = cur.size;
       return;
     }
-    const fd = fs.openSync(config.logFile, 'r');
+    const fd = fs.openSync(file, 'r');
     const buf = Buffer.alloc(cur.size - size);
     fs.readSync(fd, buf, 0, buf.length, size);
     fs.closeSync(fd);
     size = cur.size;
-    for (const line of buf.toString('utf8').split('\n').filter(Boolean)) {
+    const lines = (pending + decoder.write(buf)).split('\n');
+    pending = lines.pop();
+    for (const line of lines.filter(Boolean)) {
       try {
-        console.log(formatDecision(JSON.parse(line)));
+        const record = JSON.parse(line);
+        if (record.type === 'completed') console.log(`Laya  completed ${record.id}  HTTP ${record.status}`);
+        else if (record.type === 'failed') console.log(`Laya  failed ${record.id}  ${record.error}`);
+        else console.log(formatDecision(record));
       } catch {
-        // Skip a partially written line.
+        // Skip malformed complete records.
       }
     }
   });

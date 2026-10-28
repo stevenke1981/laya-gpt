@@ -84,6 +84,7 @@ export function loadConfig(env = process.env) {
     minConfidence: probabilityEnv(env, 'LAYA_MIN_CONFIDENCE', 0.5),
     home,
     logFile: path.join(home, 'decisions.jsonl'),
+    eventFile: path.join(home, 'events.jsonl'),
     quiet: env.LAYA_QUIET === '1',
   });
 }

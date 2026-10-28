@@ -140,7 +140,10 @@ test('serve follows decisions when an existing laya-gpt proxy owns the port', as
   try {
     for (let i = 0; i < 50 && !output.includes('following'); i++) await new Promise((r) => setTimeout(r, 100));
     assert.match(output, /Following decisions/);
-    fs.appendFileSync(path.join(home, 'decisions.jsonl'), JSON.stringify({ step: 7, effort: 'high', hold: 1, ms: 3, reasons: ['test decision'] }) + '\n');
+    const record = JSON.stringify({ step: 7, effort: 'high', hold: 1, ms: 3, reasons: ['test decision'] }) + '\n';
+    fs.appendFileSync(path.join(home, 'decisions.jsonl'), record.slice(0, 15));
+    await new Promise((r) => setTimeout(r, 500));
+    fs.appendFileSync(path.join(home, 'decisions.jsonl'), record.slice(15));
     for (let i = 0; i < 50 && !output.includes('test decision'); i++) await new Promise((r) => setTimeout(r, 100));
     assert.match(output, /HIGH/);
     assert.match(output, /test decision/);

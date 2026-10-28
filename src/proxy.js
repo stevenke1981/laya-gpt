@@ -4,6 +4,7 @@
 // Long-task help: a routed request whose plan has open steps gets a reminder at its end,
 // and a Responses turn the model ended early is resumed on the same stream (splice.js).
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import zlib from 'node:zlib';
 import { createRouter } from './router.js';
 import { parseTurn } from './trajectory.js';
@@ -205,7 +206,7 @@ export function createProxy(config, deps = {}) {
   const openRouterOf = deps.isOpenRouter ?? isOpenRouter;
   const stopCheckFn = deps.stopCheckFn ?? layaStopCheck;
   const stats = { requests: 0, routed: 0, byEffort: {}, reasoningTokens: {}, continued: 0, nudged: 0 };
-  const identity = { app: APP, version: VERSION, build: BUILD, pid: process.pid, startedAt: new Date().toISOString() };
+  const identity = { app: APP, version: VERSION, build: BUILD, pid: process.pid, startedAt: new Date().toISOString(), eventStream: true };
 
   // Effort for this generation, or null when the request is left alone.
   async function decide(body, turn, { session, judgeTarget, applyEffort, routeModel }) {
@@ -354,20 +355,30 @@ export function createProxy(config, deps = {}) {
 
     const upstreamModel = body.model;
     const sent = decision ? describeSent(decision, { applyEffort, model: upstreamModel, requested }) : null;
+    const eventId = sent ? randomUUID() : null;
     if (sent) {
       countSent(sent);
       if (!config.quiet) print(formatDecision(sent));
+      log.event?.({ type: 'decision', id: eventId, ts: new Date().toISOString(), ...sent });
     }
 
     const headers = { ...forwardHeaders(req.headers), 'content-type': 'application/json' };
     const signal = abortOnClose(res);
-    const upstream = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
-    const resumable = sent != null && config.continueTurns && config.mode !== 'off'
-      && protocol === PROTOCOLS.responses && body.stream === true
-      && upstream.status === 200 && isEventStream(upstream);
     const trail = { body, session, url, headers, signal, resumes: [], usage: null };
-    const usage = await relay(res, upstream, { resumable, trail });
-    if (sent) recordRouted({ sent, session, protocol, nudged: reminded != null, trail, usage, status: upstream.status });
+    try {
+      const upstream = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
+      const resumable = sent != null && config.continueTurns && config.mode !== 'off'
+        && protocol === PROTOCOLS.responses && body.stream === true
+        && upstream.status === 200 && isEventStream(upstream);
+      const usage = await relay(res, upstream, { resumable, trail });
+      if (sent) {
+        recordRouted({ sent, session, protocol, nudged: reminded != null, trail, usage, status: upstream.status });
+        log.event?.({ type: 'completed', id: eventId, ts: new Date().toISOString(), status: upstream.status });
+      }
+    } catch (err) {
+      if (sent) log.event?.({ type: 'failed', id: eventId, ts: new Date().toISOString(), error: failureNote(err) });
+      throw err;
+    }
   }
 
   async function handle(req, res) {

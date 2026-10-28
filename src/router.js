@@ -30,7 +30,9 @@ export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } 
           ladder,
           minConfidence: config.minConfidence,
         });
-        return { a: combineEffort(d, heuristic, turn.steps.length === 0), source: 'laya', cost: d.cost };
+        const useLaya = turn.steps.length === 0 || d.target > heuristic.target;
+        return { a: combineEffort(d, heuristic, turn.steps.length === 0), source: useLaya ? 'laya' : 'heuristic (laya considered)', cost: d.cost,
+          suggestions: { laya: ladder[d.target], heuristic: ladder[heuristic.target] } };
       } catch (err) {
         return { a: heuristic, source: `heuristic (laya failed: ${err.message})`, cost: null };
       }
@@ -65,7 +67,7 @@ export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } 
     const started = performance.now();
     const step = turn.steps.length + 1;
     const prev = sessions.get(sessionKey);
-    const { a, source, cost } = await assessTurn(body, judgeTarget, turn, step);
+    const { a, source, cost, suggestions } = await assessTurn(body, judgeTarget, turn, step);
     const fresh = isNewTurn(prev, step);
     let state = nextState(prev, a, step);
     const continues = fresh ? 0 : prev.continues ?? 0;
@@ -81,6 +83,8 @@ export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } 
       hold: state.hold,
       reasons: state.reasons,
       source,
+      ...(suggestions ? { suggestions } : {}),
+      ...(state.level !== a.target ? { adjustment: 'session policy' } : {}),
       cost,
       ms: Math.round(performance.now() - started),
     };

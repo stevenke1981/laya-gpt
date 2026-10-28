@@ -82,6 +82,21 @@ test('decodes zstd request bodies', async () => {
   }
 });
 
+test('logs a decision before an upstream failure and reports the failure', async () => {
+  const events = [];
+  const config = loadConfig({ LAYA_UPSTREAM: 'http://127.0.0.1:1', LAYA_HOME: '.laya-test', LAYA_MODE: 'heuristic' });
+  const { server } = createProxy(config, { log: { write() {}, event: (record) => events.push(record) }, print() {} });
+  const port = await listen(server);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, { method: 'POST', body: JSON.stringify(request([user('hi')])) });
+    assert.equal(response.status, 502);
+    assert.deepEqual(events.map((e) => e.type), ['decision', 'failed']);
+    assert.equal(events[0].id, events[1].id);
+  } finally {
+    server.close();
+  }
+});
+
 test('leaves non-reasoning requests and other paths untouched', async () => {
   const h = await harness();
   try {
