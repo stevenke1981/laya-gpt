@@ -33,7 +33,7 @@ async function harness(env = {}, deps = {}) {
   });
   const upPort = await listen(upstream);
   const logged = [];
-  const config = loadConfig({ JEV_UPSTREAM: `http://127.0.0.1:${upPort}/base`, JEV_HOME: '.jev-test', ...env });
+  const config = loadConfig({ LAYA_UPSTREAM: `http://127.0.0.1:${upPort}/base`, LAYA_HOME: '.laya-test', ...env });
   const { server, stats } = createProxy(config, { log: { write: (r) => logged.push(r) }, print: () => {}, ...deps });
   const port = await listen(server);
   const close = () => { server.close(); upstream.close(); };
@@ -103,7 +103,7 @@ test('llm mode uses the judge and falls back to heuristic on error', async () =>
     if (calls === 2) throw new Error('timeout');
     return { target: 2, hold: 1, reasons: ['judge: stuck'] };
   };
-  const h = await harness({ JEV_MODE: 'llm' }, { judgeFn });
+  const h = await harness({ LAYA_MODE: 'llm' }, { judgeFn });
   try {
     const step = (n) => [user('fix it'), ...Array.from({ length: n }, (_, i) => [
       { type: 'function_call', name: 'shell', call_id: `k${i}`, arguments: '{"command":["ls"]}' },
@@ -157,31 +157,31 @@ test('judge verdict parsing and SSE text collection', async () => {
 });
 
 test('config rejects invalid ladders and modes', () => {
-  assert.throws(() => loadConfig({ JEV_LEVELS: 'low,turbo' }), /JEV_LEVELS/);
-  assert.throws(() => loadConfig({ JEV_MODE: 'smart' }), /JEV_MODE/);
+  assert.throws(() => loadConfig({ LAYA_LEVELS: 'low,turbo' }), /LAYA_LEVELS/);
+  assert.throws(() => loadConfig({ LAYA_MODE: 'smart' }), /LAYA_MODE/);
 });
 
-test('jev-auto is rewritten to the configured model id; other models keep their name', async () => {
-  const h = await harness({ JEV_MODE: 'heuristic' });
+test('laya-auto is rewritten to the configured model id; other models keep their name', async () => {
+  const h = await harness({ LAYA_MODE: 'heuristic' });
   try {
     const post = (model) => fetch(`http://127.0.0.1:${h.port}/v1/responses`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request([user('hi')], { model })),
     }).then((r) => r.text());
-    await post('jev-auto');
+    await post('laya-auto');
     await post('gpt-x');
     assert.equal(JSON.parse(h.seen[0].body).model, 'gpt-6.1-terra');
     assert.equal(JSON.parse(h.seen[1].body).model, 'gpt-x');
-    assert.deepEqual(h.logged.map((r) => [r.requested, r.model]), [['jev-auto', 'gpt-6.1-terra'], ['gpt-x', 'gpt-x']]);
+    assert.deepEqual(h.logged.map((r) => [r.requested, r.model]), [['laya-auto', 'gpt-6.1-terra'], ['gpt-x', 'gpt-x']]);
   } finally {
     h.close();
   }
 });
 
-test('JEV_MODE=off still maps jev-auto to the model and leaves the effort alone', async () => {
-  const h = await harness({ JEV_MODE: 'off' });
+test('LAYA_MODE=off still maps laya-auto to the model and leaves the effort alone', async () => {
+  const h = await harness({ LAYA_MODE: 'off' });
   try {
     await fetch(`http://127.0.0.1:${h.port}/v1/responses`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request([user('hi')], { model: 'jev-auto' })),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request([user('hi')], { model: 'laya-auto' })),
     }).then((r) => r.text());
     const sent = JSON.parse(h.seen[0].body);
     assert.equal(sent.model, 'gpt-6.1-terra');

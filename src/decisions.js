@@ -1,4 +1,4 @@
-// TypeSafe Jev (typesafe/jev-1.14) via the OpenRouter Decisions API:
+// TypeSafe Laya (typesafe/laya-1.14) via the OpenRouter Decisions API:
 // typed questions in, probabilities out — no generated text to parse.
 
 const MAX_STEPS = 12;
@@ -55,15 +55,15 @@ export function buildQuestions(ladder) {
   };
 }
 
-/** Maps Jev answers onto the policy's assessment shape. */
+/** Maps Laya answers onto the policy's assessment shape. */
 export function toAssessment(answers, ladder, minConfidence) {
   const effort = answers?.effort;
   const stuck = answers?.stuck?.noul;
   if (effort?.type !== 'score' || typeof effort.score !== 'number' || typeof stuck !== 'number') {
-    throw new Error('Jev returned an unexpected answer shape');
+    throw new Error('Laya returned an unexpected answer shape');
   }
   if ((effort.confidence ?? 1) < minConfidence) {
-    throw new Error(`Jev confidence ${effort.confidence.toFixed(2)} < ${minConfidence}`);
+    throw new Error(`Laya confidence ${effort.confidence.toFixed(2)} < ${minConfidence}`);
   }
   const target = Math.max(0, Math.min(ladder.length - 1, Math.round(effort.score)));
   const hold = stuck >= 0.75 ? 2 : stuck >= 0.5 ? 1 : 0;
@@ -72,7 +72,7 @@ export function toAssessment(answers, ladder, minConfidence) {
     hold,
     release: stuck < 0.25,
     stuck,
-    reasons: [`jev score ${effort.score.toFixed(2)} (conf ${(effort.confidence ?? 0).toFixed(2)}), stuck ${stuck.toFixed(2)}`],
+    reasons: [`laya score ${effort.score.toFixed(2)} (conf ${(effort.confidence ?? 0).toFixed(2)}), stuck ${stuck.toFixed(2)}`],
   };
 }
 
@@ -90,7 +90,7 @@ async function postDecision(opts, state, questions) {
     signal: AbortSignal.timeout(opts.timeoutMs),
   });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(`Jev HTTP ${res.status}: ${body?.error?.message ?? 'no error body'}`);
+  if (!res.ok) throw new Error(`Laya HTTP ${res.status}: ${body?.error?.message ?? 'no error body'}`);
   return body;
 }
 
@@ -99,7 +99,7 @@ async function postDecision(opts, state, questions) {
  *          minConfidence:number, sessionId?:string, currentEffort?:string}} opts
  * @returns {Promise<{target:number, hold:number, release:boolean, stuck:number, reasons:string[], cost:number|null}>}
  */
-export async function jevDecide(turn, opts) {
+export async function layaDecide(turn, opts) {
   const body = await postDecision(opts, buildState(turn, opts.currentEffort), buildQuestions(opts.ladder));
   return { ...toAssessment(body?.answers, opts.ladder, opts.minConfidence), cost: body?.usage?.cost ?? null };
 }
@@ -114,14 +114,14 @@ const UNFINISHED_QUESTION = {
 };
 
 /**
- * Asks Jev whether a generation that ended the turn stopped before the task was done.
+ * Asks Laya whether a generation that ended the turn stopped before the task was done.
  * @param {object} turn the parsed turn (userText, steps)
  * @param {{total:number, done:number, open:string[]}|null} plan
  * @param {string} finalText the text of the generation that ended the turn
  * @param {{url:string, apiKey:string, model:string, timeoutMs:number, sessionId?:string}} opts
  * @returns {Promise<{unfinished:number, reasons:string[], cost:number|null}>}
  */
-export async function jevStopCheck(turn, plan, finalText, opts) {
+export async function layaStopCheck(turn, plan, finalText, opts) {
   const state = {
     ...buildState(turn, null),
     final_message: String(finalText ?? '').slice(0, MAX_FINAL),
@@ -129,6 +129,6 @@ export async function jevStopCheck(turn, plan, finalText, opts) {
   };
   const body = await postDecision(opts, state, { unfinished: UNFINISHED_QUESTION });
   const unfinished = body?.answers?.unfinished?.noul;
-  if (!Number.isFinite(unfinished)) throw new Error('Jev returned an unexpected answer shape');
-  return { unfinished, reasons: [`jev unfinished ${unfinished.toFixed(2)}`], cost: body?.usage?.cost ?? null };
+  if (!Number.isFinite(unfinished)) throw new Error('Laya returned an unexpected answer shape');
+  return { unfinished, reasons: [`laya unfinished ${unfinished.toFixed(2)}`], cost: body?.usage?.cost ?? null };
 }

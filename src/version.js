@@ -28,17 +28,17 @@ function computeBuild() {
 
 export const BUILD = computeBuild();
 
-// Identity a proxy reports in /jev/health. Only a payload carrying this exact id is ours:
+// Identity a proxy reports in /laya/health. Only a payload carrying this exact id is ours:
 // `status` and `stop` never signal a process that answers with anything else.
-export const APP = 'jev-gpt';
+export const APP = 'laya-gpt';
 
-/** @returns {boolean} true only when the /jev/health payload says it is this project's proxy */
+/** @returns {boolean} true only when the /laya/health payload says it is this project's proxy */
 export function isOurProxy(health) {
   return health?.app === APP;
 }
 
 /**
- * Compares a running proxy's /jev/health payload with the code on disk.
+ * Compares a running proxy's /laya/health payload with the code on disk.
  * @returns {{status: 'current'|'stale', message: string}}
  */
 export function compareBuild(health, local = { version: VERSION, build: BUILD }) {
@@ -49,6 +49,6 @@ export function compareBuild(health, local = { version: VERSION, build: BUILD })
   return {
     status: 'stale',
     message: `the running proxy is ${running}, but the code on disk is v${local.version} build ${local.build}; `
-      + 'stop it and rerun "jev-gpt serve" so it picks up the update',
+      + 'stop it and rerun "laya-gpt serve" so it picks up the update',
   };
 }

@@ -190,7 +190,7 @@ function openStepLines(open) {
 /** Reminder appended before a generation while the plan has open steps. */
 export function nudgeText(plan) {
   const open = plan?.open ?? [];
-  const head = `[jev] ${plan?.done ?? 0} of ${plan?.total ?? 0} plan steps done.`;
+  const head = `[laya] ${plan?.done ?? 0} of ${plan?.total ?? 0} plan steps done.`;
   const lines = open.length > 0 ? [`${head} Open steps:`, openStepLines(open)] : [head];
   return [...lines, NUDGE_FOOTER].join('\n');
 }
@@ -198,7 +198,7 @@ export function nudgeText(plan) {
 /** Instruction that resumes a turn the agent ended too early. */
 export function continueText(plan, reasons) {
   const why = reasons?.length ? reasons.join('; ') : 'work remains';
-  const lines = [`[jev] You ended your turn but the task is not finished (${why}).`];
+  const lines = [`[laya] You ended your turn but the task is not finished (${why}).`];
   if (plan) {
     lines.push(`Plan: ${plan.done} of ${plan.total} steps done.`);
     if (plan.open.length > 0) lines.push('Open steps:', openStepLines(plan.open));

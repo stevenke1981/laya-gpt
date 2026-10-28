@@ -1,6 +1,6 @@
 // Transparent Responses / Chat Completions proxy that rewrites only the reasoning
 // effort, so the prompt prefix (and therefore prompt caching) is untouched.
-// A routed `jev-auto` request also gets its model rewritten to the one configured model.
+// A routed `laya-auto` request also gets its model rewritten to the one configured model.
 // Long-task help: a routed request whose plan has open steps gets a reminder at its end,
 // and a Responses turn the model ended early is resumed on the same stream (splice.js).
 import http from 'node:http';
@@ -11,7 +11,7 @@ import { parseChatTurn, chatWantsReasoning, applyChatEffort, chatSessionKey } fr
 import { createDecisionLog, formatDecision, formatContinue, usageTokens } from './log.js';
 import { wantsModelRouting, modelId, clampEffort } from './model.js';
 import { turnPlan, finalOutput, assessStop, nudgeText, continueText } from './longtask.js';
-import { jevStopCheck } from './decisions.js';
+import { layaStopCheck } from './decisions.js';
 import {
   continuationBody, developerMessage, forwardHeaders, isEventStream, pipeWithContinuation, writeChunk, writeUpstreamHead,
 } from './splice.js';
@@ -170,7 +170,7 @@ function abortOnClose(res) {
   return controller.signal;
 }
 
-// JEV_MODE=off leaves the effort alone, but a jev-auto alias still needs the real model id.
+// LAYA_MODE=off leaves the effort alone, but a laya-auto alias still needs the real model id.
 const OFF_DECISION = Object.freeze({ effort: null, from: null, step: 0, hold: 0, reasons: ['mode off'], source: 'off', cost: null, ms: 0 });
 
 // The decision as it went upstream: the effort only when it was applied, the model as sent.
@@ -203,7 +203,7 @@ export function createProxy(config, deps = {}) {
   const log = deps.log ?? createDecisionLog(config);
   const print = deps.print ?? ((s) => process.stdout.write(`${s}\n`));
   const openRouterOf = deps.isOpenRouter ?? isOpenRouter;
-  const stopCheckFn = deps.stopCheckFn ?? jevStopCheck;
+  const stopCheckFn = deps.stopCheckFn ?? layaStopCheck;
   const stats = { requests: 0, routed: 0, byEffort: {}, reasoningTokens: {}, continued: 0, nudged: 0 };
   const identity = { app: APP, version: VERSION, build: BUILD, pid: process.pid, startedAt: new Date().toISOString() };
 
@@ -226,10 +226,10 @@ export function createProxy(config, deps = {}) {
     if (sent.effort) stats.byEffort[sent.effort] = (stats.byEffort[sent.effort] ?? 0) + 1;
   }
 
-  // How unfinished a generation that ended the turn looks. Jev judges it in jev mode; when
-  // Jev fails, the heuristic decides instead, and `source` says which one did.
+  // How unfinished a generation that ended the turn looks. Laya judges it in laya mode; when
+  // Laya fails, the heuristic decides instead, and `source` says which one did.
   async function stopCheck(turn, plan, text, session) {
-    if (config.mode !== 'jev') return { ...assessStop(turn, plan, text), source: 'heuristic' };
+    if (config.mode !== 'laya') return { ...assessStop(turn, plan, text), source: 'heuristic' };
     try {
       const judged = await stopCheckFn(turn, plan, text, {
         url: config.decisionUrl,
@@ -238,9 +238,9 @@ export function createProxy(config, deps = {}) {
         timeoutMs: config.judgeTimeoutMs,
         sessionId: session,
       });
-      return { ...judged, source: 'jev' };
+      return { ...judged, source: 'laya' };
     } catch (err) {
-      return { ...assessStop(turn, plan, text), source: `heuristic (jev failed: ${failureNote(err)})` };
+      return { ...assessStop(turn, plan, text), source: `heuristic (laya failed: ${failureNote(err)})` };
     }
   }
 
@@ -266,7 +266,7 @@ export function createProxy(config, deps = {}) {
       method: 'POST', headers: trail.headers, body: JSON.stringify(body), signal: trail.signal,
     });
     if (!next.ok || !isEventStream(next)) {
-      process.stderr.write(`jev: resume #${continues} failed: HTTP ${next.status}\n`);
+      process.stderr.write(`laya: resume #${continues} failed: HTTP ${next.status}\n`);
       return next;
     }
     trail.body = body;
@@ -293,7 +293,7 @@ export function createProxy(config, deps = {}) {
         trail.usage = event.response?.usage ?? trail.usage;
       },
       onCompleted: (data) => resumeTurn(trail, data),
-      onError: (err) => process.stderr.write(`jev: resume failed: ${err.message}\n`),
+      onError: (err) => process.stderr.write(`laya: resume failed: ${err.message}\n`),
     }));
     return trail.usage;
   }
@@ -333,7 +333,7 @@ export function createProxy(config, deps = {}) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('expected a JSON object');
     } catch (err) {
       res.writeHead(400, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ error: { message: `jev: bad request body: ${err.message}` } }));
+      return res.end(JSON.stringify({ error: { message: `laya: bad request body: ${err.message}` } }));
     }
 
     const requested = body.model;
@@ -343,7 +343,7 @@ export function createProxy(config, deps = {}) {
     const inject = protocol === PROTOCOLS.chat && openRouter;
     const applyEffort = config.mode !== 'off' && (protocol.wantsReasoning(body) || inject);
     const routeModel = wantsModelRouting(body, config);
-    // An alias like jev-auto is not a real model, so the judge runs on the configured one.
+    // An alias like laya-auto is not a real model, so the judge runs on the configured one.
     const judgeModel = routeModel ? modelId(config, openRouter) : body.model;
     const judgeTarget = protocol.judge ? { url, headers: forwardHeaders(req.headers), model: judgeModel } : null;
     const turn = protocol.parse(body);
@@ -373,7 +373,7 @@ export function createProxy(config, deps = {}) {
 
   async function handle(req, res) {
     stats.requests++;
-    if (req.url === '/jev/health') {
+    if (req.url === '/laya/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, ...identity, mode: config.mode, ladder: config.ladder, stats }));
     }
@@ -396,12 +396,12 @@ export function createProxy(config, deps = {}) {
       if (err.name === 'AbortError') return;
       if (err instanceof BadRequest && !res.headersSent) {
         res.writeHead(400, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ error: { message: `jev: ${err.message}` } }));
+        return res.end(JSON.stringify({ error: { message: `laya: ${err.message}` } }));
       }
-      process.stderr.write(`jev: ${req.method} ${req.url} failed: ${err.message}\n`);
+      process.stderr.write(`laya: ${req.method} ${req.url} failed: ${err.message}\n`);
       if (!res.headersSent) {
         res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: `jev proxy: ${err.message}` } }));
+        res.end(JSON.stringify({ error: { message: `laya proxy: ${err.message}` } }));
       } else {
         res.destroy(err);
       }

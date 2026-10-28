@@ -13,20 +13,20 @@ function effortLevels(d) {
     : d.effort.toUpperCase();
 }
 
-// Mirrors the in-task status line: "Jev  LOW → MEDIUM  ✓ APPLIED".
+// Mirrors the in-task status line: "Laya  LOW → MEDIUM  ✓ APPLIED".
 export function formatDecision(d) {
   const levels = effortLevels(d);
   const reasons = d.reasons ?? [];
   const gens = Math.max(1, d.hold);
   const detail = [`Step ${d.step}`, ...(d.effort ? [`next ${gens} generation(s)`] : []), `${d.ms} ms`, reasons.join('; ')];
-  return `${C.blue}Jev${C.reset}  ${C.bold}${levels}${C.reset}  ${C.green}✓ APPLIED${C.reset}\n`
+  return `${C.blue}Laya${C.reset}  ${C.bold}${levels}${C.reset}  ${C.green}✓ APPLIED${C.reset}\n`
     + `${C.dim}     ${detail.join(' · ')}${C.reset}`;
 }
 
-// The resume line: "Jev  RESUME #2 → HIGH  ✓ APPLIED", then the step, unfinished score and reasons.
+// The resume line: "Laya  RESUME #2 → HIGH  ✓ APPLIED", then the step, unfinished score and reasons.
 export function formatContinue(c) {
   const detail = [`Step ${c.step}`, `unfinished ${c.unfinished.toFixed(2)}`, c.source, (c.reasons ?? []).join('; ')];
-  return `${C.blue}Jev${C.reset}  ${C.bold}RESUME #${c.n} → ${c.effort.toUpperCase()}${C.reset}  ${C.green}✓ APPLIED${C.reset}\n`
+  return `${C.blue}Laya${C.reset}  ${C.bold}RESUME #${c.n} → ${c.effort.toUpperCase()}${C.reset}  ${C.green}✓ APPLIED${C.reset}\n`
     + `${C.dim}     ${detail.filter(Boolean).join(' · ')}${C.reset}`;
 }
 
@@ -35,7 +35,7 @@ export function createDecisionLog(config) {
   return {
     write(record) {
       fs.appendFile(config.logFile, `${JSON.stringify(record)}\n`, (err) => {
-        if (err) process.stderr.write(`jev: cannot write ${config.logFile}: ${err.message}\n`);
+        if (err) process.stderr.write(`laya: cannot write ${config.logFile}: ${err.message}\n`);
       });
     },
   };

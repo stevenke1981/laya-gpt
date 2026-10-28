@@ -11,7 +11,7 @@ const ROUTE = async () => ({ target: 0, hold: 0, release: true, stuck: 0, reason
 const NO_NETWORK = async () => {
   throw new Error('no network in tests');
 };
-const JEV_KEY = { OPENROUTER_API_KEY: 'sk-or-test' };
+const LAYA_KEY = { OPENROUTER_API_KEY: 'sk-or-test' };
 const PROMISE = 'Next I will add tests.';
 const DONE = 'All tests pass and the work is done.';
 const USAGE = { input_tokens: 5, output_tokens: 9, output_tokens_details: { reasoning_tokens: 7 } };
@@ -79,7 +79,7 @@ async function start({ env = {}, deps = {}, replies }) {
   const upPort = await listen(upstream);
   const logged = [];
   const printed = [];
-  const config = loadConfig({ JEV_UPSTREAM: `http://127.0.0.1:${upPort}/base`, JEV_HOME: '.jev-test', ...env });
+  const config = loadConfig({ LAYA_UPSTREAM: `http://127.0.0.1:${upPort}/base`, LAYA_HOME: '.laya-test', ...env });
   const { server, stats } = createProxy(config, {
     decideFn: ROUTE,
     stopCheckFn: NO_NETWORK,
@@ -109,7 +109,7 @@ function post(h, body, path = '/v1/responses') {
   });
 }
 
-const HEURISTIC = { JEV_MODE: 'heuristic' };
+const HEURISTIC = { LAYA_MODE: 'heuristic' };
 
 test('a turn that stops on a promise is resumed once, and the client sees one stream', async () => {
   const first = answer('r1', PROMISE);
@@ -134,11 +134,11 @@ test('a turn that stops on a promise is resumed once, and the client sees one st
       n: 1, effort: 'medium', unfinished: 0.75, source: 'heuristic', reasons: ['promises more work'],
     }]);
     assert.equal(h.stats.continued, 1);
-    assert.deepEqual(h.printed.filter((s) => s.startsWith('Jev  RESUME')).map((s) => s.split('\n')[0]), [
-      'Jev  RESUME #1 → MEDIUM  ✓ APPLIED',
+    assert.deepEqual(h.printed.filter((s) => s.startsWith('Laya  RESUME')).map((s) => s.split('\n')[0]), [
+      'Laya  RESUME #1 → MEDIUM  ✓ APPLIED',
     ]);
 
-    const health = await (await fetch(`${h.base}/jev/health`)).json();
+    const health = await (await fetch(`${h.base}/laya/health`)).json();
     assert.equal(health.stats.continued, 1);
     assert.equal(health.stats.nudged, 0);
   } finally {
@@ -146,7 +146,7 @@ test('a turn that stops on a promise is resumed once, and the client sees one st
   }
 });
 
-test('the continuation replays the output without ids, adds the [jev] developer message and a higher effort', async () => {
+test('the continuation replays the output without ids, adds the [laya] developer message and a higher effort', async () => {
   const h = await start({ env: HEURISTIC, replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))] });
   try {
     const input = [user('fix the parser'), ...shellStep('k1')];
@@ -163,7 +163,7 @@ test('the continuation replays the output without ids, adds the [jev] developer 
     assert.equal('id' in cont.input[input.length], false);
     const developer = cont.input.at(-1);
     assert.equal(developer.role, 'developer');
-    assert.match(developer.content[0].text, /^\[jev\] You ended your turn but the task is not finished \(promises more work\)\./);
+    assert.match(developer.content[0].text, /^\[laya\] You ended your turn but the task is not finished \(promises more work\)\./);
     assert.equal(cont.model, 'gpt-x');
     assert.equal(cont.prompt_cache_key, 'sess-1');
   } finally {
@@ -187,9 +187,9 @@ test('the decision log keeps the usage of the last generation and the reasoning 
   }
 });
 
-test('chained resumes stop at JEV_MAX_CONTINUES', async () => {
+test('chained resumes stop at LAYA_MAX_CONTINUES', async () => {
   const rounds = [answer('r1', PROMISE), answer('r2', PROMISE), answer('r3', PROMISE)];
-  const h = await start({ env: { ...HEURISTIC, JEV_MAX_CONTINUES: '2' }, replies: rounds.map(sse) });
+  const h = await start({ env: { ...HEURISTIC, LAYA_MAX_CONTINUES: '2' }, replies: rounds.map(sse) });
   try {
     const res = await post(h, request([user('fix the parser'), ...shellStep('k1')]));
 
@@ -241,8 +241,8 @@ test('no resume for a turn without steps or a plan, even when the answer promise
   }
 });
 
-test('no resume with JEV_CONTINUE=off', async () => {
-  const h = await start({ env: { ...HEURISTIC, JEV_CONTINUE: 'off' }, replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))] });
+test('no resume with LAYA_CONTINUE=off', async () => {
+  const h = await start({ env: { ...HEURISTIC, LAYA_CONTINUE: 'off' }, replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))] });
   try {
     await (await post(h, request([user('fix the parser'), ...shellStep('k1')]))).text();
     assert.equal(h.seen.length, 1);
@@ -261,14 +261,14 @@ test('no resume when the heuristic scores the stop below the threshold', async (
   }
 });
 
-test('jev decides the stop: a low score releases a turn the heuristic would resume', async () => {
+test('laya decides the stop: a low score releases a turn the heuristic would resume', async () => {
   const calls = [];
   const h = await start({
-    env: JEV_KEY,
+    env: LAYA_KEY,
     deps: {
       stopCheckFn: async (turn, plan, text, opts) => {
         calls.push({ steps: turn.steps.length, plan, text, opts });
-        return { unfinished: 0.2, reasons: ['jev unfinished 0.20'], cost: null };
+        return { unfinished: 0.2, reasons: ['laya unfinished 0.20'], cost: null };
       },
     },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))],
@@ -281,7 +281,7 @@ test('jev decides the stop: a low score releases a turn the heuristic would resu
       plan: null,
       text: PROMISE,
       opts: {
-        url: 'https://openrouter.ai/api/alpha/decisions', apiKey: 'sk-or-test', model: 'typesafe/jev-1.14',
+        url: 'https://openrouter.ai/api/alpha/decisions', apiKey: 'sk-or-test', model: 'typesafe/laya-1.14',
         timeoutMs: 2500, sessionId: 'sess-1',
       },
     }]);
@@ -290,15 +290,15 @@ test('jev decides the stop: a low score releases a turn the heuristic would resu
   }
 });
 
-test('a jev score above the threshold resumes with source jev', async () => {
+test('a laya score above the threshold resumes with source laya', async () => {
   let judged = 0;
   const h = await start({
-    env: JEV_KEY,
+    env: LAYA_KEY,
     deps: {
       // Once above the threshold, then done: the second round is released.
       stopCheckFn: async () => (judged++ === 0
-        ? { unfinished: 0.8, reasons: ['jev unfinished 0.80'], cost: 0.0004 }
-        : { unfinished: 0.1, reasons: ['jev unfinished 0.10'], cost: null }),
+        ? { unfinished: 0.8, reasons: ['laya unfinished 0.80'], cost: 0.0004 }
+        : { unfinished: 0.1, reasons: ['laya unfinished 0.10'], cost: null }),
     },
     replies: [sse(answer('r1', DONE)), sse(answer('r2', DONE))],
   });
@@ -307,16 +307,16 @@ test('a jev score above the threshold resumes with source jev', async () => {
     await until(() => h.logged.length === 1);
     assert.equal(h.seen.length, 2);
     assert.deepEqual(h.logged[0].continues, [{
-      n: 1, effort: 'medium', unfinished: 0.8, source: 'jev', reasons: ['jev unfinished 0.80'],
+      n: 1, effort: 'medium', unfinished: 0.8, source: 'laya', reasons: ['laya unfinished 0.80'],
     }]);
   } finally {
     h.close();
   }
 });
 
-test('a failed jev stop check falls back to the heuristic and says so', async () => {
+test('a failed laya stop check falls back to the heuristic and says so', async () => {
   const h = await start({
-    env: JEV_KEY,
+    env: LAYA_KEY,
     deps: { stopCheckFn: async () => { throw new Error('timeout'); } },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))],
   });
@@ -324,7 +324,7 @@ test('a failed jev stop check falls back to the heuristic and says so', async ()
     await (await post(h, request([user('fix the parser'), ...shellStep('k1')]))).text();
     await until(() => h.logged.length === 1);
     assert.equal(h.seen.length, 2);
-    assert.equal(h.logged[0].continues[0].source, 'heuristic (jev failed: timeout)');
+    assert.equal(h.logged[0].continues[0].source, 'heuristic (laya failed: timeout)');
     assert.equal(h.logged[0].continues[0].unfinished, 0.75);
   } finally {
     h.close();
@@ -412,7 +412,7 @@ test('a turn still waiting on a streamed tool call is not resumed, even when the
   }
 });
 
-test('two streams of one session that both reach the stop check cannot go over JEV_MAX_CONTINUES', async () => {
+test('two streams of one session that both reach the stop check cannot go over LAYA_MAX_CONTINUES', async () => {
   const verdict = { unfinished: 0.9, reasons: ['test'], cost: null };
   const waiting = [];
   // Both streams reach the stop check before either is answered, so both pass the first cap check.
@@ -422,7 +422,7 @@ test('two streams of one session that both reach the stop check cannot go over J
     else setTimeout(() => resolve(verdict), 500).unref();
   });
   const h = await start({
-    env: { ...JEV_KEY, JEV_MAX_CONTINUES: '1' },
+    env: { ...LAYA_KEY, LAYA_MAX_CONTINUES: '1' },
     deps: { stopCheckFn },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', PROMISE)), sse(answer('r3', DONE))],
   });
@@ -438,24 +438,24 @@ test('two streams of one session that both reach the stop check cannot go over J
   }
 });
 
-test('a failed jev stop check is noted on one line of at most 80 characters', async () => {
+test('a failed laya stop check is noted on one line of at most 80 characters', async () => {
   const h = await start({
-    env: JEV_KEY,
+    env: LAYA_KEY,
     deps: { stopCheckFn: async () => { throw new Error(`a\r\nb${'c'.repeat(100)}`); } },
     replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))],
   });
   try {
     await (await post(h, request([user('fix the parser'), ...shellStep('k1')]))).text();
     await until(() => h.logged.length === 1);
-    assert.equal(h.logged[0].continues[0].source, `heuristic (jev failed: a b${'c'.repeat(77)})`);
+    assert.equal(h.logged[0].continues[0].source, `heuristic (laya failed: a b${'c'.repeat(77)})`);
   } finally {
     h.close();
   }
 });
 
 test('formatContinue prints the resume line and a dim detail line', () => {
-  const line = formatContinue({ n: 2, effort: 'high', step: 3, unfinished: 0.823, source: 'jev', reasons: ['jev unfinished 0.82'] });
-  assert.equal(stripAnsi(line), 'Jev  RESUME #2 → HIGH  ✓ APPLIED\n     Step 3 · unfinished 0.82 · jev · jev unfinished 0.82');
+  const line = formatContinue({ n: 2, effort: 'high', step: 3, unfinished: 0.823, source: 'laya', reasons: ['laya unfinished 0.82'] });
+  assert.equal(stripAnsi(line), 'Laya  RESUME #2 → HIGH  ✓ APPLIED\n     Step 3 · unfinished 0.82 · laya · laya unfinished 0.82');
   const bare = stripAnsi(formatContinue({ n: 1, effort: 'medium', step: 1, unfinished: 0.75, source: 'heuristic', reasons: [] }));
   assert.equal(bare.split('\n')[1], '     Step 1 · unfinished 0.75 · heuristic');
 });
@@ -464,7 +464,7 @@ const PLAN_OPEN = [{ step: 'Write parser', status: 'completed' }, { step: 'Add t
 const PLAN_DONE = [{ step: 'Write parser', status: 'completed' }, { step: 'Add tests', status: 'completed' }];
 
 test('a routed Responses request with open plan steps gets the reminder as its last item', async () => {
-  const h = await start({ env: { ...HEURISTIC, JEV_CONTINUE: 'off' }, replies: [sse(answer('r1', 'Working on it.'))] });
+  const h = await start({ env: { ...HEURISTIC, LAYA_CONTINUE: 'off' }, replies: [sse(answer('r1', 'Working on it.'))] });
   try {
     const input = [user('refactor the parser'), ...planStep(PLAN_OPEN)];
     await (await post(h, request(input))).text();
@@ -475,7 +475,7 @@ test('a routed Responses request with open plan steps gets the reminder as its l
     const reminder = sent.at(-1);
     assert.equal(reminder.type, 'message');
     assert.equal(reminder.role, 'developer');
-    assert.match(reminder.content[0].text, /^\[jev\] 1 of 2 plan steps done\. Open steps:\n- Add tests\n/);
+    assert.match(reminder.content[0].text, /^\[laya\] 1 of 2 plan steps done\. Open steps:\n- Add tests\n/);
     await until(() => h.logged.length === 1);
     assert.equal(h.logged[0].nudged, true);
     assert.equal(h.stats.nudged, 1);
@@ -485,7 +485,7 @@ test('a routed Responses request with open plan steps gets the reminder as its l
 });
 
 test('no reminder when the plan has no open step', async () => {
-  const h = await start({ env: { ...HEURISTIC, JEV_CONTINUE: 'off' }, replies: [sse(answer('r1', DONE))] });
+  const h = await start({ env: { ...HEURISTIC, LAYA_CONTINUE: 'off' }, replies: [sse(answer('r1', DONE))] });
   try {
     const input = [user('refactor the parser'), ...planStep(PLAN_DONE)];
     await (await post(h, request(input))).text();
@@ -497,8 +497,8 @@ test('no reminder when the plan has no open step', async () => {
   }
 });
 
-test('JEV_NUDGE=off appends no reminder', async () => {
-  const h = await start({ env: { ...HEURISTIC, JEV_CONTINUE: 'off', JEV_NUDGE: 'off' }, replies: [sse(answer('r1', 'Working.'))] });
+test('LAYA_NUDGE=off appends no reminder', async () => {
+  const h = await start({ env: { ...HEURISTIC, LAYA_CONTINUE: 'off', LAYA_NUDGE: 'off' }, replies: [sse(answer('r1', 'Working.'))] });
   try {
     const input = [user('refactor the parser'), ...planStep(PLAN_OPEN)];
     await (await post(h, request(input))).text();
@@ -517,7 +517,7 @@ test('a Chat Completions request with open todos gets the reminder as a final sy
     { role: 'tool', tool_call_id: 't1', content: 'ok' },
   ];
   const json = JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'Working.' } }], usage: { completion_tokens: 3, completion_tokens_details: { reasoning_tokens: 2 } } });
-  const h = await start({ env: { ...HEURISTIC, JEV_CONTINUE: 'off' }, replies: [{ type: 'application/json', body: json }] });
+  const h = await start({ env: { ...HEURISTIC, LAYA_CONTINUE: 'off' }, replies: [{ type: 'application/json', body: json }] });
   try {
     const res = await post(h, { model: 'm', stream: false, reasoning_effort: 'low', messages }, '/v1/chat/completions');
     assert.equal(res.status, 200);
@@ -525,7 +525,7 @@ test('a Chat Completions request with open todos gets the reminder as a final sy
     const sent = h.seen[0].body.messages;
     assert.deepEqual(sent.slice(0, messages.length), messages);
     assert.deepEqual(sent.at(-1).role, 'system');
-    assert.match(sent.at(-1).content, /^\[jev\] 1 of 2 plan steps done\. Open steps:\n- Add tests\n/);
+    assert.match(sent.at(-1).content, /^\[laya\] 1 of 2 plan steps done\. Open steps:\n- Add tests\n/);
     await until(() => h.logged.length === 1);
     assert.equal(h.logged[0].api, 'chat');
     assert.equal(h.logged[0].nudged, true);
@@ -547,8 +547,8 @@ test('a request the router leaves alone gets no reminder and is never resumed', 
   }
 });
 
-test('JEV_MODE=off neither reminds nor resumes', async () => {
-  const h = await start({ env: { JEV_MODE: 'off' }, replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))] });
+test('LAYA_MODE=off neither reminds nor resumes', async () => {
+  const h = await start({ env: { LAYA_MODE: 'off' }, replies: [sse(answer('r1', PROMISE)), sse(answer('r2', DONE))] });
   try {
     const body = request([user('refactor the parser'), ...planStep(PLAN_OPEN), ...shellStep('k1')]);
     const reply = await (await post(h, body)).text();

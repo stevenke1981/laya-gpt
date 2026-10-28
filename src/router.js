@@ -1,13 +1,13 @@
-// Per-session effort routing: trajectory -> assessment (Jev, heuristic or judge) -> hysteresis.
+// Per-session effort routing: trajectory -> assessment (Laya, heuristic or judge) -> hysteresis.
 // The session state also remembers how often this turn was resumed after an early stop.
 import { parseTurn } from './trajectory.js';
 import { assess, nextState, isNewTurn } from './policy.js';
 import { judge } from './judge.js';
-import { jevDecide } from './decisions.js';
+import { layaDecide } from './decisions.js';
 
 const MAX_SESSIONS = 500;
 
-export function createRouter(config, { judgeFn = judge, decideFn = jevDecide } = {}) {
+export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } = {}) {
   const sessions = new Map();
   const ladder = config.ladder;
   const defaultLevel = Math.max(0, ladder.indexOf(config.defaultEffort));
@@ -20,7 +20,7 @@ export function createRouter(config, { judgeFn = judge, decideFn = jevDecide } =
 
   async function assessTurn(body, sessionKey, judgeTarget, turn, prev, step) {
     const heuristic = assess(turn, ladder, config.defaultEffort);
-    if (config.mode === 'jev') {
+    if (config.mode === 'laya') {
       try {
         const d = await decideFn(turn, {
           url: config.decisionUrl,
@@ -30,12 +30,12 @@ export function createRouter(config, { judgeFn = judge, decideFn = jevDecide } =
           ladder,
           minConfidence: config.minConfidence,
           sessionId: sessionKey,
-          // A new turn starts from the default, so Jev scores against it.
+          // A new turn starts from the default, so Laya scores against it.
           currentEffort: prev && step > 1 ? ladder[prev.level] : config.defaultEffort,
         });
-        return { a: d, source: 'jev', cost: d.cost };
+        return { a: d, source: 'laya', cost: d.cost };
       } catch (err) {
-        return { a: heuristic, source: `heuristic (jev failed: ${err.message})`, cost: null };
+        return { a: heuristic, source: `heuristic (laya failed: ${err.message})`, cost: null };
       }
     }
     if (config.mode === 'llm' && judgeTarget && step > 1) {
@@ -59,7 +59,7 @@ export function createRouter(config, { judgeFn = judge, decideFn = jevDecide } =
    * @param {object} body Responses or Chat Completions request body
    * @param {string} sessionKey
    * @param {{url:string, headers:Record<string,string>, model?:string}|null} judgeTarget model: what
-   *   the judge runs on when JEV_JUDGE_MODEL is unset (the proxy resolves aliases)
+   *   the judge runs on when LAYA_JUDGE_MODEL is unset (the proxy resolves aliases)
    * @param {object} [turn] parsed trajectory; defaults to the Responses `input`
    * @returns {Promise<{effort:string, from:string|null, step:number, hold:number, reasons:string[],
    *   source:string, cost:number|null, ms:number}>}

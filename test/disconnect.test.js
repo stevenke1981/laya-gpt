@@ -55,11 +55,11 @@ async function waitFor(check, ms = 2000) {
 }
 
 for (const continueTurns of ['on', 'off']) {
-  test(`a client that leaves at response.completed is still logged (JEV_CONTINUE=${continueTurns})`, async () => {
+  test(`a client that leaves at response.completed is still logged (LAYA_CONTINUE=${continueTurns})`, async () => {
     const upstream = lingeringUpstream();
     const upstreamPort = await listen(upstream);
     const config = {
-      ...loadConfig({ JEV_MODE: 'heuristic', JEV_CONTINUE: continueTurns, OPENROUTER_API_KEY: '' }),
+      ...loadConfig({ LAYA_MODE: 'heuristic', LAYA_CONTINUE: continueTurns, OPENROUTER_API_KEY: '' }),
       upstream: `http://127.0.0.1:${upstreamPort}/v1`,
     };
     const records = [];

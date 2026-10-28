@@ -1,13 +1,13 @@
 {
-  "name": "jev-gpt",
+  "name": "laya-gpt",
   "version": "0.1.0",
-  "description": "Runs one GPT model (GPT-6.1 Terra), lets Jev pick the reasoning effort (low..xhigh) per generation, and resumes long tasks the model stops too early.",
+  "description": "Runs one GPT model (GPT-6.1 Terra), lets Laya pick the reasoning effort (low..xhigh) per generation, and resumes long tasks the model stops too early.",
   "type": "module",
   "bin": {
-    "jev-gpt": "bin/jev.js"
+    "laya-gpt": "bin/laya.js"
   },
   "scripts": {
-    "start": "node bin/jev.js serve",
+    "start": "node bin/laya.js serve",
     "test": "node --test"
   },
   "engines": {

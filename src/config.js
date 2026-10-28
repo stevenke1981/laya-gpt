@@ -7,7 +7,7 @@ function parseLadder(raw) {
   const ladder = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   const bad = ladder.filter((e) => !EFFORTS.includes(e));
   if (bad.length || ladder.length === 0) {
-    throw new Error(`JEV_LEVELS must be a comma list of ${EFFORTS.join('/')}; got "${raw}"`);
+    throw new Error(`LAYA_LEVELS must be a comma list of ${EFFORTS.join('/')}; got "${raw}"`);
   }
   return ladder;
 }
@@ -33,49 +33,49 @@ function switchEnv(env, name, fallback) {
 }
 
 export function loadConfig(env = process.env) {
-  const home = env.JEV_HOME || path.join(os.homedir(), '.jev-gpt');
+  const home = env.LAYA_HOME || path.join(os.homedir(), '.laya-gpt');
   const openrouterKey = env.OPENROUTER_API_KEY || '';
-  // With an OpenRouter key the TypeSafe Jev decision model routes by default.
-  const mode = (env.JEV_MODE || (openrouterKey ? 'jev' : 'heuristic')).toLowerCase();
-  if (!['jev', 'heuristic', 'llm', 'off'].includes(mode)) throw new Error(`JEV_MODE must be jev|heuristic|llm|off; got "${mode}"`);
-  if (mode === 'jev' && !openrouterKey) throw new Error('JEV_MODE=jev needs OPENROUTER_API_KEY');
-  const ladder = parseLadder(env.JEV_LEVELS || 'low,medium,high,xhigh');
-  const defaultEffort = (env.JEV_DEFAULT_EFFORT || 'medium').trim().toLowerCase();
+  // With an OpenRouter key the TypeSafe Laya decision model routes by default.
+  const mode = (env.LAYA_MODE || (openrouterKey ? 'laya' : 'heuristic')).toLowerCase();
+  if (!['laya', 'heuristic', 'llm', 'off'].includes(mode)) throw new Error(`LAYA_MODE must be laya|heuristic|llm|off; got "${mode}"`);
+  if (mode === 'laya' && !openrouterKey) throw new Error('LAYA_MODE=laya needs OPENROUTER_API_KEY');
+  const ladder = parseLadder(env.LAYA_LEVELS || 'low,medium,high,xhigh');
+  const defaultEffort = (env.LAYA_DEFAULT_EFFORT || 'medium').trim().toLowerCase();
   if (!ladder.includes(defaultEffort)) {
-    throw new Error(`JEV_DEFAULT_EFFORT must be one of JEV_LEVELS (${ladder.join(',')}); got "${defaultEffort}"`);
+    throw new Error(`LAYA_DEFAULT_EFFORT must be one of LAYA_LEVELS (${ladder.join(',')}); got "${defaultEffort}"`);
   }
   return Object.freeze({
-    host: env.JEV_HOST || '127.0.0.1',
-    port: intEnv(env, 'JEV_PORT', 8789),
+    host: env.LAYA_HOST || '127.0.0.1',
+    port: intEnv(env, 'LAYA_PORT', 8790),
     ladder,
     // Where a turn starts when nothing says it is trivial or hard, and the floor once the
     // model has tried to stop early in a turn.
     defaultEffort,
     // The one upstream model; every routed request is served by it.
-    model: env.JEV_GPT_MODEL || 'gpt-6.1-terra',
+    model: env.LAYA_GPT_MODEL || 'gpt-6.1-terra',
     // Client model names that hand the request to the router (besides the model id itself).
-    autoModels: (env.JEV_AUTO_MODELS || 'jev-auto,auto').split(',').map((s) => s.trim()).filter(Boolean),
+    autoModels: (env.LAYA_AUTO_MODELS || 'laya-auto,auto').split(',').map((s) => s.trim()).filter(Boolean),
     // Long-task help: resume a turn the model ended before the work was done, and remind it
     // of an unfinished plan before each generation.
-    continueTurns: switchEnv(env, 'JEV_CONTINUE', 'on'),
-    maxContinues: intEnv(env, 'JEV_MAX_CONTINUES', 3),
-    continueThreshold: probabilityEnv(env, 'JEV_CONTINUE_THRESHOLD', 0.6),
-    nudge: switchEnv(env, 'JEV_NUDGE', 'on'),
+    continueTurns: switchEnv(env, 'LAYA_CONTINUE', 'on'),
+    maxContinues: intEnv(env, 'LAYA_MAX_CONTINUES', 3),
+    continueThreshold: probabilityEnv(env, 'LAYA_CONTINUE_THRESHOLD', 0.6),
+    nudge: switchEnv(env, 'LAYA_NUDGE', 'on'),
     mode,
     // Fixed upstream; when unset the auth type picks ChatGPT backend, OpenRouter or API.
-    upstream: env.JEV_UPSTREAM || '',
-    chatgptUpstream: env.JEV_CHATGPT_UPSTREAM || 'https://chatgpt.com/backend-api/codex',
-    apiUpstream: env.JEV_API_UPSTREAM || 'https://api.openai.com/v1',
-    openrouterUpstream: env.JEV_OPENROUTER_UPSTREAM || 'https://openrouter.ai/api/v1',
-    judgeModel: env.JEV_JUDGE_MODEL || '',
-    judgeEffort: env.JEV_JUDGE_EFFORT || 'low',
-    judgeTimeoutMs: intEnv(env, 'JEV_JUDGE_TIMEOUT_MS', 2500),
+    upstream: env.LAYA_UPSTREAM || '',
+    chatgptUpstream: env.LAYA_CHATGPT_UPSTREAM || 'https://chatgpt.com/backend-api/codex',
+    apiUpstream: env.LAYA_API_UPSTREAM || 'https://api.openai.com/v1',
+    openrouterUpstream: env.LAYA_OPENROUTER_UPSTREAM || 'https://openrouter.ai/api/v1',
+    judgeModel: env.LAYA_JUDGE_MODEL || '',
+    judgeEffort: env.LAYA_JUDGE_EFFORT || 'low',
+    judgeTimeoutMs: intEnv(env, 'LAYA_JUDGE_TIMEOUT_MS', 2500),
     openrouterKey,
-    decisionModel: env.JEV_DECISION_MODEL || 'typesafe/jev-1.14',
-    decisionUrl: env.JEV_DECISION_URL || 'https://openrouter.ai/api/alpha/decisions',
-    minConfidence: probabilityEnv(env, 'JEV_MIN_CONFIDENCE', 0.3),
+    decisionModel: env.LAYA_DECISION_MODEL || 'typesafe/laya-1.14',
+    decisionUrl: env.LAYA_DECISION_URL || 'https://openrouter.ai/api/alpha/decisions',
+    minConfidence: probabilityEnv(env, 'LAYA_MIN_CONFIDENCE', 0.3),
     home,
     logFile: path.join(home, 'decisions.jsonl'),
-    quiet: env.JEV_QUIET === '1',
+    quiet: env.LAYA_QUIET === '1',
   });
 }

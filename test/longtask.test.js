@@ -291,9 +291,9 @@ test('assessStop: rules apply in order (user input, open plan, permission, failu
   assert.equal(assessStop(turn([bad]), null, 'Fixed.').unfinished, 0.5);
 });
 
-test('nudgeText: [jev] line with the counts, open steps and the keep-going rule', () => {
+test('nudgeText: [laya] line with the counts, open steps and the keep-going rule', () => {
   const text = nudgeText({ total: 4, done: 2, open: ['Write tests', 'Update docs'] });
-  assert.match(text, /^\[jev\] 2 of 4 plan steps done\. Open steps:\n- Write tests\n- Update docs\n/);
+  assert.match(text, /^\[laya\] 2 of 4 plan steps done\. Open steps:\n- Write tests\n- Update docs\n/);
   assert.match(text, /Keep working through every remaining step/);
   assert.match(text, /verify the result before you end your turn/);
   assert.match(text, /Do not stop to summarize or to ask whether to continue/);
@@ -313,9 +313,9 @@ test('nudgeText: stays under 900 chars even with long steps and large counts', (
   assert.ok(!text.includes('y'.repeat(121)));
 });
 
-test('continueText: [jev] reason line, plan progress, open steps and the resume instruction', () => {
+test('continueText: [laya] reason line, plan progress, open steps and the resume instruction', () => {
   const text = continueText({ total: 3, done: 1, open: ['Write tests'] }, ['asks permission to continue', 'plan 1/3 done']);
-  assert.match(text, /^\[jev\] You ended your turn but the task is not finished \(asks permission to continue; plan 1\/3 done\)\.\n/);
+  assert.match(text, /^\[laya\] You ended your turn but the task is not finished \(asks permission to continue; plan 1\/3 done\)\.\n/);
   assert.match(text, /Plan: 1 of 3 steps done\./);
   assert.match(text, /Open steps:\n- Write tests\n/);
   assert.match(text, /Continue now: do the remaining work with your tools, then verify\. Only stop to ask if you need information only the user has\./);

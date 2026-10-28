@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { buildState, buildQuestions, toAssessment, jevDecide, jevStopCheck } from '../src/decisions.js';
+import { buildState, buildQuestions, toAssessment, layaDecide, layaStopCheck } from '../src/decisions.js';
 import { createRouter } from '../src/router.js';
 import { loadConfig } from '../src/config.js';
 
@@ -56,16 +56,16 @@ function decisionsServer(handler) {
   return new Promise((r) => server.listen(0, '127.0.0.1', () => r({ server, seen, url: `http://127.0.0.1:${server.address().port}/api/alpha/decisions` })));
 }
 
-test('jevDecide posts a Decisions request and returns cost', async () => {
+test('layaDecide posts a Decisions request and returns cost', async () => {
   const { server, seen, url } = await decisionsServer((res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'gen-dec-1', model: 'typesafe/jev-1.14-20261014', answers: answers(1.1, 0.6), usage: { input_tokens: 400, output_tokens: 0, cost: 0.0000168 } }));
+    res.end(JSON.stringify({ id: 'gen-dec-1', model: 'typesafe/laya-1.14-20261014', answers: answers(1.1, 0.6), usage: { input_tokens: 400, output_tokens: 0, cost: 0.0000168 } }));
   });
   try {
-    const d = await jevDecide(turn, { url, apiKey: 'or-test', model: 'typesafe/jev-1.14', timeoutMs: 2000, ladder: LADDER, minConfidence: 0.3, sessionId: 's1' });
+    const d = await layaDecide(turn, { url, apiKey: 'or-test', model: 'typesafe/laya-1.14', timeoutMs: 2000, ladder: LADDER, minConfidence: 0.3, sessionId: 's1' });
     assert.deepEqual([d.target, d.hold, d.cost, d.stuck], [1, 1, 0.0000168, 0.6]);
     assert.equal(seen[0].headers.authorization, 'Bearer or-test');
-    assert.equal(seen[0].body.model, 'typesafe/jev-1.14');
+    assert.equal(seen[0].body.model, 'typesafe/laya-1.14');
     assert.equal(seen[0].body.session_id, 's1');
     assert.deepEqual(Object.keys(seen[0].body.questions), ['effort', 'stuck']);
   } finally {
@@ -73,20 +73,20 @@ test('jevDecide posts a Decisions request and returns cost', async () => {
   }
 });
 
-const stopOpts = (url, extra = {}) => ({ url, apiKey: 'or-test', model: 'typesafe/jev-1.14', timeoutMs: 2000, ...extra });
+const stopOpts = (url, extra = {}) => ({ url, apiKey: 'or-test', model: 'typesafe/laya-1.14', timeoutMs: 2000, ...extra });
 const unfinishedReply = (noul, cost = 0.00003) => (res) => {
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ answers: { unfinished: { type: 'noul', noul } }, usage: { cost } }));
 };
 
-test('jevStopCheck asks one unfinished question with the turn, final text and plan', async () => {
+test('layaStopCheck asks one unfinished question with the turn, final text and plan', async () => {
   const { server, seen, url } = await decisionsServer(unfinishedReply(0.82));
   try {
     const plan = { total: 3, done: 1, open: ['write tests', 'update docs'] };
-    const r = await jevStopCheck(turn, plan, 'Next I will add tests.', stopOpts(url, { sessionId: 's2' }));
-    assert.deepEqual(r, { unfinished: 0.82, reasons: ['jev unfinished 0.82'], cost: 0.00003 });
+    const r = await layaStopCheck(turn, plan, 'Next I will add tests.', stopOpts(url, { sessionId: 's2' }));
+    assert.deepEqual(r, { unfinished: 0.82, reasons: ['laya unfinished 0.82'], cost: 0.00003 });
     assert.equal(seen[0].headers.authorization, 'Bearer or-test');
-    assert.equal(seen[0].body.model, 'typesafe/jev-1.14');
+    assert.equal(seen[0].body.model, 'typesafe/laya-1.14');
     assert.equal(seen[0].body.session_id, 's2');
     assert.deepEqual(Object.keys(seen[0].body.questions), ['unfinished']);
     assert.equal(seen[0].body.questions.unfinished.type, 'noul');
@@ -100,10 +100,10 @@ test('jevStopCheck asks one unfinished question with the turn, final text and pl
   }
 });
 
-test('jevStopCheck truncates the final message, sends a null plan and no session when absent', async () => {
+test('layaStopCheck truncates the final message, sends a null plan and no session when absent', async () => {
   const { server, seen, url } = await decisionsServer(unfinishedReply(0.1));
   try {
-    const r = await jevStopCheck(turn, null, 'x'.repeat(5000), stopOpts(url));
+    const r = await layaStopCheck(turn, null, 'x'.repeat(5000), stopOpts(url));
     assert.equal(r.unfinished, 0.1);
     assert.equal(seen[0].body.state.final_message.length, 2000);
     assert.equal(seen[0].body.state.plan, null);
@@ -113,44 +113,44 @@ test('jevStopCheck truncates the final message, sends a null plan and no session
   }
 });
 
-test('jevStopCheck throws on an HTTP error and on a non-number answer', async () => {
+test('layaStopCheck throws on an HTTP error and on a non-number answer', async () => {
   const failing = await decisionsServer((res) => {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'boom' } }));
   });
   try {
-    await assert.rejects(jevStopCheck(turn, null, 'done', stopOpts(failing.url)), /Jev HTTP 500: boom/);
+    await assert.rejects(layaStopCheck(turn, null, 'done', stopOpts(failing.url)), /Laya HTTP 500: boom/);
   } finally {
     failing.server.close();
   }
   const malformed = await decisionsServer(unfinishedReply('high'));
   try {
-    await assert.rejects(jevStopCheck(turn, null, 'done', stopOpts(malformed.url)), /unexpected answer shape/);
+    await assert.rejects(layaStopCheck(turn, null, 'done', stopOpts(malformed.url)), /unexpected answer shape/);
   } finally {
     malformed.server.close();
   }
 });
 
-test('router falls back to heuristic when Jev errors', async () => {
+test('router falls back to heuristic when Laya errors', async () => {
   const { server, url } = await decisionsServer((res) => {
     res.writeHead(402, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: { code: 402, message: 'Insufficient credits' } }));
   });
   try {
-    const config = loadConfig({ OPENROUTER_API_KEY: 'or-test', JEV_DECISION_URL: url });
-    assert.equal(config.mode, 'jev');
+    const config = loadConfig({ OPENROUTER_API_KEY: 'or-test', LAYA_DECISION_URL: url });
+    assert.equal(config.mode, 'laya');
     const router = createRouter(config);
     const body = { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }] };
     const d = await router.route(body, 's', null);
     assert.equal(d.effort, 'low');
-    assert.match(d.source, /jev failed: Jev HTTP 402: Insufficient credits/);
+    assert.match(d.source, /laya failed: Laya HTTP 402: Insufficient credits/);
   } finally {
     server.close();
   }
 });
 
-test('config: jev is default only with a key, and explicit jev requires one', () => {
+test('config: laya is default only with a key, and explicit laya requires one', () => {
   assert.equal(loadConfig({}).mode, 'heuristic');
-  assert.throws(() => loadConfig({ JEV_MODE: 'jev' }), /OPENROUTER_API_KEY/);
-  assert.throws(() => loadConfig({ OPENROUTER_API_KEY: 'k', JEV_MIN_CONFIDENCE: '2' }), /JEV_MIN_CONFIDENCE/);
+  assert.throws(() => loadConfig({ LAYA_MODE: 'laya' }), /OPENROUTER_API_KEY/);
+  assert.throws(() => loadConfig({ OPENROUTER_API_KEY: 'k', LAYA_MIN_CONFIDENCE: '2' }), /LAYA_MIN_CONFIDENCE/);
 });
