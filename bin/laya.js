@@ -8,6 +8,7 @@ import { loadConfig, EFFORTS } from '../src/config.js';
 import { createProxy } from '../src/proxy.js';
 import { formatDecision, readDecisions, usageTokens } from '../src/log.js';
 import { VERSION, BUILD, APP, isOurProxy, compareBuild } from '../src/version.js';
+import { addGlobal, removeGlobal, hasGlobal } from '../src/codexconfig.js';
 
 const NAME = APP;
 // Codex profile name; `codex -p layagpt` selects the provider written by `install`.
@@ -19,6 +20,9 @@ Usage:
   ${NAME} serve              Run the proxy in the foreground (shows live decisions)
                                 (opencode/aider/crush: base URL http://127.0.0.1:8790/v1, model laya-auto)
   ${NAME} install [--force]  Write the "${PROFILE}" Codex profile ($CODEX_HOME/${PROFILE}.config.toml)
+  ${NAME} install --global   Also make ${NAME} the default in $CODEX_HOME/config.toml, for the Codex desktop app
+                                and IDE extensions (they cannot pass -p); "${NAME} serve" must be running
+  ${NAME} uninstall          Undo install: restore config.toml and remove the profile
   ${NAME} codex [args...]    Start the proxy if needed, then run: codex -p ${PROFILE} [args...]
   ${NAME} tail               Follow routing decisions as they happen
   ${NAME} stats              Summarize past decisions by effort, with reasoning tokens and resumed turns
@@ -50,8 +54,12 @@ requires_openai_auth = true
 `;
 }
 
-function install(config, force) {
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+function codexHomeDir() {
+  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
+function install(config, force, global) {
+  const codexHome = codexHomeDir();
   const file = path.join(codexHome, `${PROFILE}.config.toml`);
   if (fs.existsSync(file) && !force && !fs.readFileSync(file, 'utf8').startsWith(PROFILE_MARKER)) {
     throw new Error(`${file} exists and was not written by ${NAME}; rerun with --force to overwrite`);
@@ -59,6 +67,38 @@ function install(config, force) {
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(file, profileToml(config));
   console.log(`wrote ${file}\nrun: ${NAME} codex   (or start "${NAME} serve" and use: codex -p ${PROFILE})`);
+  if (global) installGlobal(config, codexHome);
+}
+
+function readIfExists(file) {
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+}
+
+function installGlobal(config, codexHome) {
+  const file = path.join(codexHome, 'config.toml');
+  const before = readIfExists(file);
+  const after = addGlobal(before ?? '', config);
+  // The first install keeps a copy of the untouched file; later installs leave it alone.
+  const backup = `${file}.${NAME}.bak`;
+  if (before != null && !hasGlobal(before) && !fs.existsSync(backup)) fs.writeFileSync(backup, before);
+  fs.writeFileSync(file, after);
+  console.log(`made ${NAME} the default provider in ${file}${before != null ? ` (backup: ${backup})` : ''}\n`
+    + `every Codex client (desktop app, IDE, plain "codex") now needs "${NAME} serve" running; undo with: ${NAME} uninstall`);
+}
+
+function uninstall() {
+  const codexHome = codexHomeDir();
+  const main = path.join(codexHome, 'config.toml');
+  const text = readIfExists(main);
+  if (text != null && hasGlobal(text)) {
+    fs.writeFileSync(main, removeGlobal(text));
+    console.log(`restored ${main}`);
+  }
+  const profile = path.join(codexHome, `${PROFILE}.config.toml`);
+  if (readIfExists(profile)?.startsWith(PROFILE_MARKER)) {
+    fs.rmSync(profile);
+    console.log(`removed ${profile}`);
+  }
 }
 
 /** @returns {Promise<object|null>} the /laya/health payload of whatever answers the port, or null */
@@ -266,7 +306,8 @@ async function main() {
   const config = loadConfig();
   switch (cmd) {
     case 'serve': return serve(config);
-    case 'install': return install(config, rest.includes('--force'));
+    case 'install': return install(config, rest.includes('--force'), rest.includes('--global'));
+    case 'uninstall': return uninstall();
     case 'codex': return runCodex(config, rest);
     case 'tail': return tail(config);
     case 'stats': return stats(config);

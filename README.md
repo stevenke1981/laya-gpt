@@ -109,12 +109,27 @@ codex -p layagpt           # 視窗 2
 |---|---|
 | `laya-gpt serve` | 前景執行 proxy（預設 `127.0.0.1:8790`） |
 | `laya-gpt install [--force]` | 寫入 `layagpt` profile |
+| `laya-gpt install --global` | 另把 laya-gpt 設為 `config.toml` 的預設 provider（給 Codex 桌面版／IDE 擴充） |
+| `laya-gpt uninstall` | 還原 `config.toml`、移除本工具寫的 profile |
 | `laya-gpt codex [args...]` | 必要時啟動 proxy，再執行 `codex -p layagpt [args...]` |
 | `laya-gpt tail` | 即時追蹤決策（讀 `decisions.jsonl`） |
 | `laya-gpt stats` | 依 effort 分組統計 generation、reasoning tokens 與續跑次數 |
 | `laya-gpt status` | 顯示執行中 proxy 的版本；過舊或未執行時 exit 1 |
 | `laya-gpt stop` | 停止執行中的 proxy（只停 `app` 為 `laya-gpt` 者） |
 | `laya-gpt --version` | 磁碟上程式碼的版本與 build |
+
+### Codex 桌面版與 IDE 擴充
+
+桌面版與 IDE 擴充無法帶 `-p`，只讀主設定檔 `$CODEX_HOME/config.toml`，故需 `--global`：
+
+```powershell
+laya-gpt install --global  # 第一次會備份成 config.toml.laya-gpt.bak
+laya-gpt serve             # 保持開著；桌面版不會替你啟動 proxy
+# 重開 Codex 桌面版，送一個請求；serve 視窗出現「Laya MEDIUM ✓ APPLIED」即表示已經過 proxy
+laya-gpt uninstall         # 還原
+```
+
+`--global` 在 `config.toml` 最前面加入 `model_provider`、`model`、`model_reasoning_effort`，檔尾加入 `[model_providers.layagpt]`，皆夾在 `# >>> laya-gpt` 與 `# <<< laya-gpt` 標記之間；原本的同名頂層設定改為 `# laya-gpt saved: …` 註解，`uninstall` 逐字還原。注意：之後**所有** Codex 用戶端（含直接打 `codex`）都經過 proxy，proxy 沒開即連線失敗。桌面版若改走 websocket 傳輸，請求不經過 proxy（serve 視窗不會出現決策）——**桌面版尚未實測**。
 
 **更新後請重啟 proxy**（`git pull` 後 `laya-gpt stop`）。`/laya/health` 回報 `app`、`version`、`build`、`pid`、`startedAt`、`mode`、`ladder` 與 `stats`（含 `byEffort`、`continued`、`nudged`）。`decisions.jsonl` 每筆另有 `nudged: true` 與 `continues: [{n, effort, unfinished, source, reasons}]`（有發生時）。
 
@@ -188,7 +203,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 
 ## 限制與未驗證事項
 
-- **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
+- **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；Codex 桌面版（`install --global`）未實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
 - laya 實測案例僅 29 則，皆為短句；長篇、混雜程式碼的收尾文字之準確度未量測。請以 `laya-gpt stats` 與 `decisions.jsonl` 在自身工作量觀察，必要時調 `LAYA_CONTINUE_THRESHOLD`、`LAYA_MIN_CONFIDENCE`。
 - 困難需求 laya 常信心不足而棄權（實測 0.37–0.40），此時由關鍵字規則決定。
 - 回傳給客戶端的 `usage` 只含最後一個回應；續跑那一代的 tokens 也算在上游帳單裡。
@@ -208,3 +223,4 @@ node scripts/laya-eval.mjs        # 需執行中的 laya：量測 effort 與停�
 |------|------|------|----------|
 | v0.1.0 | 2026-10-29 | 初始建立（衍生自 jev-gpt 871082f）：決策改由本機 laya（decision mode、choice 問題、規則把關）、預設 GPT-6.1 Terra medium、laya 選 low～xhigh、續跑上限 5、第一人稱承諾規則、CLI `laya-gpt`（埠 8790、profile `layagpt`） | 全部 |
 | v0.1.1 | 2026-10-29 | 依獨立審查修正：句尾條件式提議（"I'll add docs if you want"、「你想要的話我會改」）不再算承諾；承諾規則改為有界視窗（避免長文字二次方耗時）；laya 逾時後暫停 30 秒；`LAYA_DECISION_TIMEOUT_MS` 須 ≥ 1；README 更正 | `longtask.js`、`decisions.js`、`config.js`、README |
+| v0.2.0 | 2026-10-29 | `install --global`：改寫 `config.toml`（可逆、自動備份）讓 Codex 桌面版／IDE 擴充也經過 proxy；新增 `uninstall` | `bin/laya.js`、`src/codexconfig.js`、README |

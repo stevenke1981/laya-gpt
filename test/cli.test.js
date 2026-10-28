@@ -153,6 +153,32 @@ test('install writes the layagpt Codex profile for the configured model and defa
   }
 });
 
+test('install --global makes laya-gpt the default in config.toml with a backup; uninstall restores it', async () => {
+  const codexHome = tempDir();
+  const env = { ...process.env, CODEX_HOME: codexHome, LAYA_PORT: '9999', LAYA_HOME: codexHome };
+  const main = path.join(codexHome, 'config.toml');
+  const original = 'model = "gpt-5"\n\n[mcp_servers.docs]\ncommand = "docs-mcp"\n';
+  try {
+    fs.writeFileSync(main, original);
+    const first = await run(['install', '--global'], env);
+    assert.equal(first.code, 0, first.out);
+    assert.match(fs.readFileSync(main, 'utf8'), /^model_provider = "layagpt"$/m);
+    assert.equal(fs.readFileSync(`${main}.laya-gpt.bak`, 'utf8'), original);
+    assert.ok(fs.existsSync(path.join(codexHome, 'layagpt.config.toml')));
+
+    const second = await run(['install', '--global'], env);
+    assert.equal(second.code, 0, second.out);
+    assert.equal(fs.readFileSync(`${main}.laya-gpt.bak`, 'utf8'), original);
+
+    const undo = await run(['uninstall'], env);
+    assert.equal(undo.code, 0, undo.out);
+    assert.equal(fs.readFileSync(main, 'utf8'), original);
+    assert.ok(!fs.existsSync(path.join(codexHome, 'layagpt.config.toml')));
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('stats groups decisions by effort in ladder order and counts resumed early stops', async () => {
   const home = tempDir();
   const rows = [
