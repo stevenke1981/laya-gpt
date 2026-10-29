@@ -33,10 +33,10 @@ test('deployDir: env var, then the checkout setup recorded, then <home>/laya-dep
   }
 });
 
-test('serveCommand runs the venv Python directly with the port, checkpoint and token laya-gpt uses', () => {
+test('serveCommand runs the venv Python (windowless on Windows) directly with the port, checkpoint and token laya-gpt uses', () => {
   const config = loadConfig({ LAYA_DECISION_URL: 'http://127.0.0.1:8123/api/alpha/decisions', LAYA_API_KEY: 'tok' });
   const cmd = serveCommand(config, 'D:/ld', {}, 'win32');
-  assert.equal(cmd.file, path.join('D:/ld', '.venv', 'Scripts', 'python.exe'));
+  assert.equal(cmd.file, path.join('D:/ld', '.venv', 'Scripts', 'pythonw.exe'));
   assert.deepEqual(cmd.args, ['-m', 'laya_deploy.cli', 'serve']);
   assert.equal(cmd.cwd, 'D:/ld');
   assert.deepEqual(
@@ -45,6 +45,8 @@ test('serveCommand runs the venv Python directly with the port, checkpoint and t
   );
   assert.equal(venvPython('/ld', {}, 'linux'), path.join('/ld', '.venv', 'bin', 'python'));
   assert.equal(venvPython('/ld', { LAYA_DEPLOY_PYTHON: '/usr/bin/python3' }, 'linux'), '/usr/bin/python3');
+  assert.equal(serveCommand(config, 'D:/ld', { LAYA_DEPLOY_PYTHON: 'C:/py/python.exe' }, 'win32').file, 'C:/py/python.exe');
+  assert.equal(serveCommand(config, '/ld', {}, 'linux').file, path.join('/ld', '.venv', 'bin', 'python'));
   assert.equal(serveCommand(loadConfig({ LAYA_DECISION_MODEL: 'auto' }), '/ld', {}, 'linux').env.LAYA_DEPLOY_PRELOAD, 'english,multilingual');
 });
 

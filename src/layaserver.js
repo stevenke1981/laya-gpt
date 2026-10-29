@@ -45,15 +45,26 @@ export function venvPython(dir, env = process.env, platform = process.platform) 
 }
 
 /**
+ * The Python that serves laya in the background. On Windows a venv's python.exe is a
+ * launcher that starts the real interpreter as a child; started detached it has no console,
+ * so that child would open a console window of its own. pythonw.exe starts it windowless,
+ * and stopping the launcher still stops the server.
+ */
+export function serverPython(dir, env = process.env, platform = process.platform) {
+  if (env.LAYA_DEPLOY_PYTHON || platform !== 'win32') return venvPython(dir, env, platform);
+  return path.join(dir, '.venv', 'Scripts', 'pythonw.exe');
+}
+
+/**
  * How to start laya-deploy for this config. Python is run directly (not through `uv run` or
- * the .exe launcher), so the PID laya-gpt records is the server itself.
+ * the laya-deploy .exe launcher), so the PID laya-gpt records stops the server.
  * Environment beats the checkout's .env, so the bind address, port, token and preloaded
  * checkpoint always match what laya-gpt will call.
  */
 export function serveCommand(config, dir, env = process.env, platform = process.platform) {
   const { port } = layaEndpoint(config.decisionUrl);
   return {
-    file: venvPython(dir, env, platform),
+    file: serverPython(dir, env, platform),
     args: ['-m', 'laya_deploy.cli', 'serve'],
     cwd: dir,
     env: {
