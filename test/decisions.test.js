@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
   situation, effortCall, toAssessment, combineEffort, layaDecide, closingOf, layaStopCheck, resetLayaPause,
+  layaCacheStats, resetLayaCache,
 } from '../src/decisions.js';
 import { createRouter } from '../src/router.js';
 import { loadConfig } from '../src/config.js';
@@ -226,6 +227,96 @@ test('a laya that times out is paused, so later calls fail at once; an answer en
   } finally {
     resetLayaPause();
     server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('identical laya calls are answered from the cache; errors are not cached', async () => {
+  resetLayaCache();
+  let fail = true;
+  const { server, seen, url } = await decisionsServer((res) => {
+    if (fail) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'loading' } }));
+    }
+    reply(effortAnswers('high', 0.78, 0.6))(res);
+  });
+  try {
+    await assert.rejects(layaDecide(turn, opts(url, { cacheSize: 8 })), /laya HTTP 500/);
+    fail = false;
+    const first = await layaDecide(turn, opts(url, { cacheSize: 8 }));
+    assert.ok(!first.reasons.includes('cached'));
+    // Same phrase and questions: no new request; concurrent identical calls share one.
+    const [a, b] = await Promise.all([layaDecide(turn, opts(url, { cacheSize: 8 })), layaDecide(turn, opts(url, { cacheSize: 8 }))]);
+    assert.deepEqual([a.target, b.target], [first.target, first.target]);
+    assert.ok(a.reasons.includes('cached'));
+    assert.equal(seen.length, 2);
+    // A different checkpoint is a different call.
+    await layaDecide(turn, opts(url, { cacheSize: 8, model: 'multilingual' }));
+    assert.equal(seen.length, 3);
+    assert.deepEqual(layaCacheStats(), { hits: 2, misses: 3, entries: 2 });
+    // No cacheSize: every call asks laya.
+    await layaDecide(turn, opts(url));
+    assert.equal(seen.length, 4);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('the decision cache keeps at most cacheSize entries, least recently used out first', async () => {
+  resetLayaCache();
+  const { server, seen, url } = await decisionsServer(reply(effortAnswers('medium', 0.8)));
+  const ask = (text) => layaDecide({ userText: text, steps: [] }, opts(url, { cacheSize: 2 }));
+  try {
+    await ask('a');
+    await ask('b');
+    await ask('a');
+    await ask('c');
+    assert.equal(seen.length, 3);
+    await ask('a');
+    assert.equal(seen.length, 3);
+    await ask('b');
+    assert.equal(seen.length, 4);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('layaStopCheck reuses a cached answer for the same closing text', async () => {
+  resetLayaCache();
+  const answers = stopAnswers({ will_continue: 0.7, done: 0.2, needs_user: 0.1 }, { in_progress: 0.6, complete: 0.4 });
+  const { server, seen, url } = await decisionsServer(reply(answers));
+  const work = { userText: 'x', steps: [step('edit', 'apply_patch', false)] };
+  try {
+    const first = await layaStopCheck(work, null, 'Two modules left.', opts(url, { cacheSize: 4 }));
+    const again = await layaStopCheck(work, null, 'Two modules left.', opts(url, { cacheSize: 4 }));
+    assert.equal(seen.length, 1);
+    assert.equal(again.unfinished, first.unfinished);
+    assert.match(again.reasons[0], /\(cached\)$/);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('config: the decision cache holds 256 entries by default; 0 turns it off', () => {
+  assert.equal(loadConfig({}).decisionCacheSize, 256);
+  assert.equal(loadConfig({ LAYA_DECISION_CACHE: '0' }).decisionCacheSize, 0);
+});
+
+test('an answer-less laya reply is not cached', async () => {
+  resetLayaCache();
+  let empty = true;
+  const { server, seen, url } = await decisionsServer((res) => (empty ? reply(null)(res) : reply(effortAnswers('high', 0.8))(res)));
+  try {
+    await assert.rejects(layaDecide(turn, opts(url, { cacheSize: 4 })), /unexpected answer shape/);
+    empty = false;
+    assert.equal((await layaDecide(turn, opts(url, { cacheSize: 4 }))).target, 2);
+    assert.equal(seen.length, 2);
+  } finally {
+    resetLayaCache();
     server.close();
   }
 });

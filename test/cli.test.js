@@ -212,7 +212,7 @@ test('stats groups decisions by effort in ladder order and counts resumed early 
   const home = tempDir();
   const rows = [
     { model: 'gpt-6.1-terra', effort: 'xhigh', session: 'a', source: 'laya', cost: 0.001,
-      usage: { output_tokens: 100, output_tokens_details: { reasoning_tokens: 50 } }, continues: [{ effort: 'xhigh' }] },
+      usage: { input_tokens: 400, input_tokens_details: { cached_tokens: 300 }, output_tokens: 100, output_tokens_details: { reasoning_tokens: 50 } }, continues: [{ effort: 'xhigh' }] },
     { model: 'gpt-6.1-terra', effort: 'low', session: 'b', usage: { output_tokens: 10, output_tokens_details: { reasoning_tokens: 0 } } },
     { model: 'gpt-6.1-terra', effort: 'low', session: 'b', usage: { output_tokens: 20, output_tokens_details: { reasoning_tokens: 0 } } },
     { model: 'gpt-6.1-terra', effort: 'medium', session: 'c', continues: [{ effort: 'high' }, { effort: 'xhigh' }] },
@@ -226,6 +226,7 @@ test('stats groups decisions by effort in ladder order and counts resumed early 
     assert.match(res.out, /low\s+2 gens\s+0 avg reasoning tok\s+30 output tok/);
     assert.match(res.out, /xhigh\s+1 gens\s+50 avg reasoning tok\s+100 output tok/);
     assert.match(res.out, /\n {2}-\s+1 gens/);
+    assert.match(res.out, /prompt cache: 300 of 400 input tok cached \(75\.0%\)/);
 
     const order = ['  low', '  medium', '  xhigh', '  -'].map((s) => res.out.indexOf(s));
     assert.ok(order.every((i) => i > 0), res.out);
@@ -253,5 +254,35 @@ test('help names the laya-gpt commands, the variables and the port', async () =>
     assert.match(version.out, /^laya-gpt v\d+\.\d+\.\d+ \(build [0-9a-f]{12}\)/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('skills installs laya-gpt and laya-deploy skills into CODEX_HOME and uninstall removes them, leaving ~/.claude alone', async () => {
+  const codexHome = tempDir();
+  const fakeHome = tempDir();
+  const deploy = tempDir();
+  const home = tempDir();
+  const laDir = path.join(deploy, 'skills', 'laya-decisions');
+  fs.mkdirSync(laDir, { recursive: true });
+  fs.writeFileSync(path.join(laDir, 'SKILL.md'), '---\nname: laya-decisions\n---\n');
+  const env = { ...process.env, CODEX_HOME: codexHome, HOME: fakeHome, LAYA_DEPLOY_DIR: deploy, LAYA_HOME: home, LAYA_QUIET: '1' };
+  try {
+    const installed = await run(['skills'], env);
+    assert.equal(installed.code, 0, installed.out);
+    const skillsDir = path.join(codexHome, 'skills');
+    assert.ok(installed.out.includes(`installed laya-gpt, laya-decisions into ${skillsDir}`), installed.out);
+    assert.ok(fs.existsSync(path.join(skillsDir, 'laya-gpt', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(skillsDir, 'laya-decisions', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(skillsDir, 'laya-gpt', '.laya-gpt-skill')));
+    assert.ok(!fs.existsSync(path.join(fakeHome, '.claude')), 'skills without --claude touched ~/.claude');
+
+    const removed = await run(['uninstall'], env);
+    assert.equal(removed.code, 0, removed.out);
+    assert.match(removed.out, /removed skill laya-gpt from /);
+    assert.match(removed.out, /removed skill laya-decisions from /);
+    assert.ok(!fs.existsSync(path.join(skillsDir, 'laya-gpt')));
+    assert.ok(!fs.existsSync(path.join(skillsDir, 'laya-decisions')));
+  } finally {
+    for (const dir of [codexHome, fakeHome, deploy, home]) fs.rmSync(dir, { recursive: true, force: true });
   }
 });

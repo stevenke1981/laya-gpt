@@ -4,7 +4,7 @@
 // Long-task help: a routed request whose plan has open steps gets a reminder at its end,
 // and a Responses turn the model ended early is resumed on the same stream (splice.js).
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import zlib from 'node:zlib';
 import { createRouter } from './router.js';
 import { parseTurn } from './trajectory.js';
@@ -12,7 +12,7 @@ import { parseChatTurn, chatWantsReasoning, applyChatEffort, chatSessionKey } fr
 import { createDecisionLog, formatDecision, formatContinue, usageTokens } from './log.js';
 import { wantsModelRouting, modelId, clampEffort } from './model.js';
 import { turnPlan, finalOutput, assessStop, nudgeText, continueText } from './longtask.js';
-import { layaStopCheck } from './decisions.js';
+import { layaStopCheck, layaCacheStats } from './decisions.js';
 import {
   continuationBody, developerMessage, forwardHeaders, isEventStream, pipeWithContinuation, writeChunk, writeUpstreamHead,
 } from './splice.js';
@@ -96,6 +96,20 @@ const PROTOCOLS = {
 
 export function isOpenRouter(base) {
   return /(^|\.)openrouter\.ai$/i.test(new URL(base).hostname);
+}
+
+export function isOpenAiApi(base) {
+  return new URL(base).hostname.toLowerCase() === 'api.openai.com';
+}
+
+// The OpenAI API routes requests that share a prompt_cache_key to the same cache, which
+// raises prompt-cache hits for clients that send none (Chat clients, plain Responses calls).
+// Only a real session key is used: "default" would pile every client onto one key. It is
+// hashed, so a long or personal `user` value stays short and is not sent as the key. Other
+// upstreams may reject unknown fields, so they get the body unchanged.
+export function withPromptCacheKey(body, session, base) {
+  if (body.prompt_cache_key != null || session === 'default' || !isOpenAiApi(base)) return body;
+  return { ...body, prompt_cache_key: `laya:${createHash('sha1').update(session).digest('hex').slice(0, 24)}` };
 }
 
 // Watches the response without buffering an SSE stream. It keeps the final usage
@@ -205,7 +219,11 @@ export function createProxy(config, deps = {}) {
   const print = deps.print ?? ((s) => process.stdout.write(`${s}\n`));
   const openRouterOf = deps.isOpenRouter ?? isOpenRouter;
   const stopCheckFn = deps.stopCheckFn ?? layaStopCheck;
-  const stats = { requests: 0, routed: 0, byEffort: {}, reasoningTokens: {}, continued: 0, nudged: 0 };
+  const stats = {
+    requests: 0, routed: 0, byEffort: {}, reasoningTokens: {}, continued: 0, nudged: 0,
+    // Upstream prompt cache: input tokens of routed requests and how many of them were cached.
+    inputTokens: 0, cachedTokens: 0,
+  };
   const identity = { app: APP, version: VERSION, build: BUILD, pid: process.pid, startedAt: new Date().toISOString(), eventStream: true };
 
   // Effort for this generation, or null when the request is left alone.
@@ -237,6 +255,7 @@ export function createProxy(config, deps = {}) {
         apiKey: config.decisionKey,
         model: config.decisionModel,
         timeoutMs: config.decisionTimeoutMs,
+        cacheSize: config.decisionCacheSize,
       });
       return { ...judged, source: 'laya' };
     } catch (err) {
@@ -310,10 +329,12 @@ export function createProxy(config, deps = {}) {
 
   // Stats and the decision log of a routed request, once its answer has been relayed.
   function recordRouted({ sent, session, protocol, nudged, trail, usage, status }) {
-    const { reasoning } = usageTokens(usage);
+    const { reasoning, input, cached } = usageTokens(usage);
     if (reasoning != null && sent.effort) {
       stats.reasoningTokens[sent.effort] = (stats.reasoningTokens[sent.effort] ?? 0) + reasoning;
     }
+    stats.inputTokens += input ?? 0;
+    stats.cachedTokens += cached ?? 0;
     log.write({
       ts: new Date().toISOString(), session, api: protocol === PROTOCOLS.chat ? 'chat' : 'responses',
       ...sent,
@@ -349,6 +370,7 @@ export function createProxy(config, deps = {}) {
     const turn = protocol.parse(body);
     const decision = await decide(body, turn, { session, judgeTarget, applyEffort, routeModel });
     if (decision) body = rewriteRequest(protocol, body, decision, { applyEffort, inject, openRouter, routeModel });
+    body = withPromptCacheKey(body, session, base);
     const reminded = decision && config.nudge && config.mode !== 'off' ? withPlanReminder(protocol, body) : null;
     if (reminded) stats.nudged++;
     body = reminded ?? body;
@@ -385,7 +407,7 @@ export function createProxy(config, deps = {}) {
     stats.requests++;
     if (req.url === '/laya/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, ...identity, mode: config.mode, ladder: config.ladder, stats }));
+      return res.end(JSON.stringify({ ok: true, ...identity, mode: config.mode, ladder: config.ladder, stats, layaCache: layaCacheStats() }));
     }
     const raw = await readBody(req);
     const path = req.url.split('?')[0];

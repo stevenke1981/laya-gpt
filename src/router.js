@@ -27,6 +27,7 @@ export function createRouter(config, { judgeFn = judge, decideFn = layaDecide } 
           apiKey: config.decisionKey,
           model: config.decisionModel,
           timeoutMs: config.decisionTimeoutMs,
+          cacheSize: config.decisionCacheSize,
           ladder,
           minConfidence: config.minConfidence,
         });
