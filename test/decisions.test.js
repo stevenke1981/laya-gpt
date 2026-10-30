@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
   situation, effortCall, toAssessment, combineEffort, layaDecide, closingOf, layaStopCheck, resetLayaPause,
+  layaCacheStats, resetLayaCache,
 } from '../src/decisions.js';
 import { createRouter } from '../src/router.js';
 import { loadConfig } from '../src/config.js';
@@ -212,7 +213,7 @@ test('config: laya is the default mode and needs no key; the local server is the
 test('a laya that times out is paused, so later calls fail at once; an answer ends the pause', async () => {
   let hang = true;
   const { server, seen, url } = await decisionsServer((res) => {
-    if (!hang) reply(effortAnswers('high', 0.8))(res);
+    if (!hang) reply(effortAnswers('high', 0.8, 0.6))(res);
   });
   try {
     await assert.rejects(layaDecide(turn, opts(url, { timeoutMs: 50 })), { name: 'TimeoutError' });
@@ -225,6 +226,322 @@ test('a laya that times out is paused, so later calls fail at once; an answer en
     assert.equal((await layaDecide(turn, opts(url))).target, 2);
   } finally {
     resetLayaPause();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('identical laya calls are answered from the cache; errors are not cached', async () => {
+  resetLayaCache();
+  let fail = true;
+  const { server, seen, url } = await decisionsServer((res) => {
+    if (fail) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'loading' } }));
+    }
+    reply(effortAnswers('high', 0.78, 0.6))(res);
+  });
+  try {
+    await assert.rejects(layaDecide(turn, opts(url, { cacheSize: 8 })), /laya HTTP 500/);
+    fail = false;
+    const first = await layaDecide(turn, opts(url, { cacheSize: 8 }));
+    assert.ok(!first.reasons.includes('cached'));
+    // Same phrase and questions: no new request; concurrent identical calls share one.
+    const [a, b] = await Promise.all([layaDecide(turn, opts(url, { cacheSize: 8 })), layaDecide(turn, opts(url, { cacheSize: 8 }))]);
+    assert.deepEqual([a.target, b.target], [first.target, first.target]);
+    assert.ok(a.reasons.includes('cached'));
+    assert.equal(seen.length, 2);
+    // A different checkpoint is a different call.
+    await layaDecide(turn, opts(url, { cacheSize: 8, model: 'multilingual' }));
+    assert.equal(seen.length, 3);
+    assert.deepEqual(layaCacheStats(), { hits: 2, misses: 3, entries: 2 });
+    // No cacheSize: every call asks laya.
+    await layaDecide(turn, opts(url));
+    assert.equal(seen.length, 4);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('the decision cache keeps at most cacheSize entries, least recently used out first', async () => {
+  resetLayaCache();
+  const { server, seen, url } = await decisionsServer(reply(effortAnswers('medium', 0.8)));
+  const ask = (text) => layaDecide({ userText: text, steps: [] }, opts(url, { cacheSize: 2 }));
+  try {
+    await ask('a');
+    await ask('b');
+    await ask('a');
+    await ask('c');
+    assert.equal(seen.length, 3);
+    await ask('a');
+    assert.equal(seen.length, 3);
+    await ask('b');
+    assert.equal(seen.length, 4);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('layaStopCheck reuses a cached answer for the same closing text', async () => {
+  resetLayaCache();
+  const answers = stopAnswers({ will_continue: 0.7, done: 0.2, needs_user: 0.1 }, { in_progress: 0.6, complete: 0.4 });
+  const { server, seen, url } = await decisionsServer(reply(answers));
+  const work = { userText: 'x', steps: [step('edit', 'apply_patch', false)] };
+  try {
+    const first = await layaStopCheck(work, null, 'Two modules left.', opts(url, { cacheSize: 4 }));
+    const again = await layaStopCheck(work, null, 'Two modules left.', opts(url, { cacheSize: 4 }));
+    assert.equal(seen.length, 1);
+    assert.equal(again.unfinished, first.unfinished);
+    assert.match(again.reasons[0], /\(cached\)$/);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('config: the decision cache holds 256 entries by default; 0 turns it off', () => {
+  assert.equal(loadConfig({}).decisionCacheSize, 256);
+  assert.equal(loadConfig({ LAYA_DECISION_CACHE: '0' }).decisionCacheSize, 0);
+});
+
+test('an answer-less laya reply is not cached', async () => {
+  resetLayaCache();
+  let empty = true;
+  const { server, seen, url } = await decisionsServer((res) => (empty ? reply(null)(res) : reply(effortAnswers('high', 0.8, 0.6))(res)));
+  try {
+    await assert.rejects(layaDecide(turn, opts(url, { cacheSize: 4 })), /unexpected answer shape/);
+    empty = false;
+    assert.equal((await layaDecide(turn, opts(url, { cacheSize: 4 }))).target, 2);
+    assert.equal(seen.length, 2);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+const freshTurn = { userText: 'find bugs', steps: [] };
+
+// A transient bad HTTP 200 must not keep later callers from seeing a recovered server.
+const malformedAnswers = [
+  ['empty answers', {}],
+  ['array answers', []],
+  ['missing effort answer', { unrelated: choice('high', { high: 1 }) }],
+  ['wrong answer type', { effort: { type: 'score', score: 0.8 } }],
+  ['array answer', { effort: [] }],
+  ['unknown choice', { effort: choice('turbo', { turbo: 1 }) }],
+  ['missing probabilities', { effort: { type: 'choice', choice: 'high' } }],
+  ['array probabilities', { effort: { type: 'choice', choice: 'high', probabilities: [] } }],
+  ['missing option probability', { effort: choice('high', { high: 0.8 }) }],
+  ['string probability', { effort: choice('high', { low: '0.1', medium: 0.1, high: 0.7, xhigh: 0.1 }) }],
+  ['null probability', { effort: choice('high', { low: null, medium: 0.1, high: 0.8, xhigh: 0.1 }) }],
+  ['negative probability', { effort: choice('high', { low: -0.1, medium: 0.1, high: 0.9, xhigh: 0.1 }) }],
+  ['probability above one', { effort: choice('high', { low: 0, medium: 0, high: 1.1, xhigh: 0 }) }],
+];
+
+for (const [name, invalid] of malformedAnswers) {
+  test(`decision cache rejects ${name}, then accepts and caches a recovered reply`, async () => {
+    resetLayaCache();
+    let answers = invalid;
+    const { server, seen, url } = await decisionsServer((res) => reply(answers)(res));
+    const options = opts(url, { cacheSize: 4 });
+    try {
+      await assert.rejects(layaDecide(freshTurn, options), /unexpected answer shape/);
+      assert.equal(layaCacheStats().entries, 0);
+      answers = effortAnswers('high', 0.8);
+      assert.equal((await layaDecide(freshTurn, options)).target, 2);
+      assert.ok((await layaDecide(freshTurn, options)).reasons.includes('cached'));
+      assert.equal(seen.length, 2);
+    } finally {
+      resetLayaCache();
+      server.close();
+    }
+  });
+}
+
+test('all requested effort and stop answers are validated before caching', async () => {
+  resetLayaCache();
+  let answers = effortAnswers('high', 0.8); // An in-turn request also asks about being stuck.
+  const { server, seen, url } = await decisionsServer((res) => reply(answers)(res));
+  const options = opts(url, { cacheSize: 4 });
+  try {
+    await assert.rejects(layaDecide(turn, options), /unexpected answer shape/);
+    assert.equal(layaCacheStats().entries, 0);
+    answers = { ...effortAnswers('high', 0.8), stuck: choice('unknown', { stuck: 0.6, progressing: 0.4 }) };
+    await assert.rejects(layaDecide(turn, options), /unexpected answer shape/);
+    answers = effortAnswers('high', 0.8, 0.6);
+    assert.equal((await layaDecide(turn, options)).stuck, 0.6);
+
+    const validStop = stopAnswers({ will_continue: 0.7, done: 0.2, needs_user: 0.1 }, { in_progress: 0.6, complete: 0.4 });
+    const askStop = () => layaStopCheck(turn, null, 'Two modules left.', options);
+    answers = { end: validStop.end };
+    await assert.rejects(askStop(), /unexpected answer shape/);
+    answers = { ...validStop, work: choice('complete', { in_progress: 'bad', complete: 0.4 }) };
+    await assert.rejects(askStop(), /unexpected answer shape/);
+    answers = validStop;
+    assert.equal((await askStop()).unfinished, 0.7);
+    assert.match((await askStop()).reasons[0], /\(cached\)$/);
+    assert.equal(seen.length, 6);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('an unsolicited malformed stuck answer cannot poison the fresh-turn cache', async () => {
+  resetLayaCache();
+  let answers = { ...effortAnswers('high', 0.7), stuck: choice('bad', { stuck: 0.5, progressing: 0.5 }) };
+  const { server, seen, url } = await decisionsServer((res) => reply(answers)(res));
+  const options = opts(url, { cacheSize: 4 });
+  try {
+    await assert.rejects(layaDecide(freshTurn, options), /unexpected answer shape/);
+    assert.equal(layaCacheStats().entries, 0);
+    // toAssessment also consumes an optional stuck answer on a new turn, even though
+    // the request asked only about effort. A recovered answer must reach that parser.
+    answers = effortAnswers('high', 0.7, 0.6);
+    assert.equal((await layaDecide(freshTurn, options)).stuck, 0.6);
+    assert.ok((await layaDecide(freshTurn, options)).reasons.includes('cached'));
+    assert.equal(seen.length, 2);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('valid low-confidence answers remain cached and abstain for each caller', async () => {
+  resetLayaCache();
+  const { server, seen, url } = await decisionsServer(reply(effortAnswers('high', 0.4)));
+  try {
+    const options = opts(url, { cacheSize: 4 });
+    await assert.rejects(layaDecide(freshTurn, options), /abstained/);
+    await assert.rejects(layaDecide(freshTurn, options), /abstained/);
+    assert.equal(seen.length, 1);
+    // Confidence belongs to the caller's policy, not the cached answer's shape.
+    assert.equal((await layaDecide(freshTurn, { ...options, minConfidence: 0.3 })).target, 2);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('routing returns to laya after a malformed reply instead of reusing the fallback', async () => {
+  resetLayaCache();
+  let answers = {};
+  const { server, seen, url } = await decisionsServer((res) => reply(answers)(res));
+  const router = createRouter(loadConfig({ LAYA_DECISION_URL: url }));
+  const body = { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'find bugs' }] }] };
+  try {
+    assert.match((await router.route(body, 'recovery', null)).source, /heuristic \(laya failed:/);
+    answers = effortAnswers('high', 0.8);
+    const recovered = await router.route(body, 'recovery', null);
+    assert.equal(recovered.source, 'laya');
+    assert.equal(recovered.effort, 'high');
+    assert.equal((await router.route(body, 'recovery', null)).source, 'laya');
+    assert.equal(seen.length, 2);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('choice validation rejects nonfinite values and permits unused response metadata', async () => {
+  for (const value of [NaN, Infinity, -Infinity]) {
+    const invalid = effortAnswers('high', 0.8);
+    invalid.effort.probabilities.low = value;
+    assert.throws(() => toAssessment(invalid, LADDER, 0.5), /unexpected answer shape/);
+  }
+  resetLayaCache();
+  const answers = effortAnswers('high', 0.8);
+  answers.metadata = { latency_ms: 40 };
+  answers.effort.probabilities.extra = 0;
+  const { server, seen, url } = await decisionsServer(reply(answers));
+  try {
+    const options = opts(url, { cacheSize: 4 });
+    assert.equal((await layaDecide(freshTurn, options)).target, 2);
+    assert.ok((await layaDecide(freshTurn, options)).reasons.includes('cached'));
+    assert.equal(seen.length, 1);
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+test('cache-disabled calls still reject incomplete answers and retry after recovery', async () => {
+  resetLayaCache();
+  let answers = effortAnswers('high', 0.8);
+  const { server, seen, url } = await decisionsServer((res) => reply(answers)(res));
+  try {
+    await assert.rejects(layaDecide(turn, opts(url, { cacheSize: 0 })), /unexpected answer shape/);
+    answers = effortAnswers('high', 0.8, 0.6);
+    await layaDecide(turn, opts(url, { cacheSize: 0 }));
+    await layaDecide(turn, opts(url, { cacheSize: 0 }));
+    assert.equal(seen.length, 3);
+    assert.deepEqual(layaCacheStats(), { hits: 0, misses: 0, entries: 0 });
+  } finally {
+    resetLayaCache();
+    server.close();
+  }
+});
+
+async function until(check) {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > 1000) throw new Error('timed out waiting for decision request');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test('concurrent identical calls share validation, evict a bad reply, and share recovery', async () => {
+  resetLayaCache();
+  const pending = [];
+  const { server, seen, url } = await decisionsServer((res) => pending.push(res));
+  const options = opts(url, { cacheSize: 4 });
+  const ask = () => layaDecide(freshTurn, options);
+  try {
+    const failed = Promise.allSettled(Array.from({ length: 8 }, ask));
+    await until(() => pending.length === 1);
+    reply({})(pending[0]);
+    const results = await failed;
+    assert.ok(results.every((r) => r.status === 'rejected' && /unexpected answer shape/.test(r.reason.message)));
+    assert.equal(layaCacheStats().entries, 0);
+    assert.equal(seen.length, 1);
+
+    const recovered = Promise.all(Array.from({ length: 8 }, ask));
+    await until(() => pending.length === 2);
+    reply(effortAnswers('high', 0.8))(pending[1]);
+    assert.ok((await recovered).every((r) => r.target === 2));
+    assert.ok((await ask()).reasons.includes('cached'));
+    assert.equal(seen.length, 2);
+  } finally {
+    resetLayaCache();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('a failed evicted request cannot remove a newer entry for the same key', async () => {
+  resetLayaCache();
+  const pending = [];
+  const { server, seen, url } = await decisionsServer((res) => pending.push(res));
+  const ask = (text) => layaDecide({ userText: text, steps: [] }, opts(url, { cacheSize: 1 }));
+  try {
+    const stale = assert.rejects(ask('a'), /unexpected answer shape/);
+    await until(() => pending.length === 1);
+    const other = ask('b');
+    await until(() => pending.length === 2);
+    reply(effortAnswers('high', 0.8))(pending[1]);
+    await other;
+    const current = ask('a');
+    await until(() => pending.length === 3);
+    reply({})(pending[0]);
+    await stale;
+    reply(effortAnswers('high', 0.8))(pending[2]);
+    await current;
+    assert.ok((await ask('a')).reasons.includes('cached'));
+    assert.equal(seen.length, 3);
+  } finally {
+    resetLayaCache();
     server.closeAllConnections();
     server.close();
   }

@@ -13,10 +13,13 @@ import { addGlobal, removeGlobal, hasGlobal } from '../src/codexconfig.js';
 import {
   DEPLOY_REPO, deployDir, rememberDeployDir, venvPython, ensureLaya, layaHealth, startedPid, stopLaya,
 } from '../src/layaserver.js';
+import { skillSources, installSkills, removeSkills } from '../src/skills.js';
 
 const NAME = APP;
 // Codex profile name; `codex -p layagpt` selects the provider written by `install`.
 const PROFILE = 'layagpt';
+// The laya-gpt repo root; its skills/ folder holds the laya-gpt skill.
+const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const HELP = `${NAME} — one GPT model (GPT-6.1 Terra), reasoning effort low..xhigh picked by a local laya, and long-task help
 
@@ -27,10 +30,11 @@ Usage:
   ${NAME} install [--force]  Write the "${PROFILE}" Codex profile ($CODEX_HOME/${PROFILE}.config.toml)
   ${NAME} install --global   Also make ${NAME} the default in $CODEX_HOME/config.toml, for the Codex desktop app
                                 and IDE extensions (they cannot pass -p); "${NAME} serve" must be running
-  ${NAME} uninstall          Undo install: restore config.toml and remove the profile
+  ${NAME} uninstall          Undo install: restore config.toml, remove the profile and the laya agent skills
+  ${NAME} skills [--claude]  Install laya agent skills (laya-gpt, laya-decisions, laya-computer-use) into $CODEX_HOME/skills (and ~/.claude/skills)
   ${NAME} codex [args...]    Start the proxy if needed, then run: codex -p ${PROFILE} [args...]
   ${NAME} tail               Follow routing decisions as they happen
-  ${NAME} stats              Summarize past decisions by effort, with reasoning tokens and resumed turns
+  ${NAME} stats              Summarize past decisions by effort, with reasoning tokens, resumed turns and prompt-cache hits
   ${NAME} status             Show the running proxy's version and whether it is stale
   ${NAME} stop               Stop the running proxy (also one started in the background) and the laya it started
   ${NAME} --version          Print the version and build of the code on disk
@@ -92,6 +96,26 @@ function installGlobal(config, codexHome) {
     + `every Codex client (desktop app, IDE, plain "codex") now needs "${NAME} serve" running; undo with: ${NAME} uninstall`);
 }
 
+function claudeSkillsDir() {
+  return path.join(os.homedir(), '.claude', 'skills');
+}
+
+/** Installs the laya-gpt and laya-deploy skills into Codex, and into Claude Code when asked. */
+function installAgentSkills(deploy, { claude = false, force = false } = {}) {
+  const sources = skillSources(REPO_DIR, deploy);
+  if (!sources.some((s) => s.dir.startsWith(path.join(deploy, 'skills') + path.sep))) {
+    console.log(`no laya-deploy skills in ${deploy}; run "${NAME} setup" first (the ${NAME} skill is still installed)`);
+  }
+  const targets = [path.join(codexHomeDir(), 'skills'), ...(claude ? [claudeSkillsDir()] : [])];
+  for (const dir of targets) {
+    const { installed, skipped } = installSkills(sources, dir, { force });
+    if (installed.length > 0) console.log(`installed ${installed.join(', ')} into ${dir}`);
+    for (const name of skipped) {
+      console.log(`skipped ${name}: ${path.join(dir, name)} exists and was not written by ${NAME}; rerun with --force`);
+    }
+  }
+}
+
 function uninstall() {
   const codexHome = codexHomeDir();
   const main = path.join(codexHome, 'config.toml');
@@ -104,6 +128,9 @@ function uninstall() {
   if (readIfExists(profile)?.startsWith(PROFILE_MARKER)) {
     fs.rmSync(profile);
     console.log(`removed ${profile}`);
+  }
+  for (const dir of [path.join(codexHome, 'skills'), claudeSkillsDir()]) {
+    for (const name of removeSkills(dir)) console.log(`removed skill ${name} from ${dir}`);
   }
 }
 
@@ -231,6 +258,11 @@ function setup(config, rest) {
   runStep(venvPython(dir), ['-m', 'laya_deploy.cli', 'pull', '--models', ...models], dir);
   rememberDeployDir(config.home, dir);
   console.log(`laya-deploy is ready at ${dir}; "${NAME} serve" or "${NAME} codex" starts it when needed`);
+  try {
+    installAgentSkills(dir);
+  } catch (err) {
+    console.warn(`${NAME}: warning: cannot install skills: ${err.message}`);
+  }
 }
 
 async function status(config) {
@@ -341,10 +373,15 @@ function rankEffort(effort) {
   return i >= 0 ? i : EFFORTS.length;
 }
 
-/** Groups decisions by effort in ladder order; rows that set only the model go under "-". */
+// New records contain each upstream generation; old logs only have one usage snapshot.
+function generationsOf(row) {
+  return row.generations?.length ? row.generations : [{ effort: row.effort, usage: row.usage }];
+}
+
+/** Groups generations by effort in ladder order; rows that set only the model go under "-". */
 function groupByEffort(rows) {
   const groups = new Map();
-  for (const r of rows) {
+  for (const r of rows.flatMap(generationsOf)) {
     const effort = r.effort ?? '-';
     const g = groups.get(effort) ?? { effort, gens: 0, reasoning: 0, output: 0 };
     const t = usageTokens(r.usage);
@@ -361,8 +398,12 @@ function stats(config) {
   if (rows.length === 0) return console.log(`no decisions yet in ${config.logFile}`);
   const layaCalls = rows.filter((r) => r.source === 'laya').length;
   const resumed = rows.reduce((sum, r) => sum + (r.continues?.length ?? 0), 0);
-  console.log(`${rows.length} generations, ${new Set(rows.map((r) => r.session)).size} sessions, `
+  console.log(`${rows.flatMap(generationsOf).length} generations, ${new Set(rows.map((r) => r.session)).size} sessions, `
     + `${layaCalls} routed by laya, ${resumed} early stops resumed`);
+  const tokens = rows.map((r) => usageTokens(r.usage));
+  const input = tokens.reduce((sum, t) => sum + (t.input ?? 0), 0);
+  const cached = tokens.reduce((sum, t) => sum + (t.cached ?? 0), 0);
+  if (input > 0) console.log(`  prompt cache: ${cached} of ${input} input tok cached (${(100 * cached / input).toFixed(1)}%)`);
   for (const g of groupByEffort(rows)) {
     console.log(`  ${g.effort.padEnd(10)} ${String(g.gens).padStart(5)} gens  ${String(Math.round(g.reasoning / g.gens)).padStart(6)} avg reasoning tok  ${g.output} output tok`);
   }
@@ -381,6 +422,9 @@ async function main() {
     case 'stats': return stats(config);
     case 'status': return status(config);
     case 'stop': return stop(config);
+    case 'skills': return installAgentSkills(deployDir(process.env, config.home), {
+      claude: rest.includes('--claude'), force: rest.includes('--force'),
+    });
     case '--version':
     case '-v': return console.log(`${NAME} v${VERSION} (build ${BUILD})`);
     default: console.log(HELP);

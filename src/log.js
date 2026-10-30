@@ -57,10 +57,13 @@ export function readDecisions(file) {
   });
 }
 
-// Responses reports `output_tokens_details`, Chat Completions `completion_tokens_details`.
+// Responses reports `output_tokens_details`/`input_tokens_details`, Chat Completions
+// `completion_tokens_details`/`prompt_tokens_details`; `cached` is the prompt-cache hit.
 export function usageTokens(usage) {
   return {
     reasoning: usage?.output_tokens_details?.reasoning_tokens ?? usage?.completion_tokens_details?.reasoning_tokens ?? null,
     output: usage?.output_tokens ?? usage?.completion_tokens ?? null,
+    input: usage?.input_tokens ?? usage?.prompt_tokens ?? null,
+    cached: usage?.input_tokens_details?.cached_tokens ?? usage?.prompt_tokens_details?.cached_tokens ?? null,
   };
 }

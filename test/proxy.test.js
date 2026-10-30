@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { loadConfig } from '../src/config.js';
-import { createProxy, upstreamBase, upstreamUrl } from '../src/proxy.js';
+import { createProxy, upstreamBase, upstreamUrl, withPromptCacheKey } from '../src/proxy.js';
+import { usageTokens } from '../src/log.js';
 import { parseVerdict, readOutputText } from '../src/judge.js';
 
 function listen(server) {
@@ -204,4 +205,24 @@ test('LAYA_MODE=off still maps laya-auto to the model and leaves the effort alon
   } finally {
     h.close();
   }
+});
+
+test('withPromptCacheKey adds the session key only for the OpenAI API and only when missing', () => {
+  const api = 'https://api.openai.com/v1';
+  const keyed = withPromptCacheKey({ model: 'm' }, 'chat:abc', api);
+  assert.match(keyed.prompt_cache_key, /^laya:[0-9a-f]{24}$/);
+  assert.equal(withPromptCacheKey({}, 'chat:abc', api).prompt_cache_key, keyed.prompt_cache_key);
+  assert.notEqual(withPromptCacheKey({}, 'someone@example.com', api).prompt_cache_key, keyed.prompt_cache_key);
+  assert.deepEqual(withPromptCacheKey({ prompt_cache_key: 'k' }, 'chat:abc', api), { prompt_cache_key: 'k' });
+  assert.deepEqual(withPromptCacheKey({ model: 'm' }, 'default', api), { model: 'm' });
+  assert.deepEqual(withPromptCacheKey({ model: 'm' }, 'chat:abc', 'https://openrouter.ai/api/v1'), { model: 'm' });
+  assert.deepEqual(withPromptCacheKey({ model: 'm' }, 'chat:abc', 'https://chatgpt.com/backend-api/codex'), { model: 'm' });
+});
+
+test('usageTokens reads input and cached prompt tokens from both APIs', () => {
+  assert.deepEqual(usageTokens({ input_tokens: 100, input_tokens_details: { cached_tokens: 80 }, output_tokens: 5 }),
+    { reasoning: null, output: 5, input: 100, cached: 80 });
+  assert.deepEqual(usageTokens({ prompt_tokens: 50, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens: 3 }),
+    { reasoning: null, output: 3, input: 50, cached: 10 });
+  assert.deepEqual(usageTokens(null), { reasoning: null, output: null, input: null, cached: null });
 });

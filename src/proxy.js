@@ -4,7 +4,7 @@
 // Long-task help: a routed request whose plan has open steps gets a reminder at its end,
 // and a Responses turn the model ended early is resumed on the same stream (splice.js).
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import zlib from 'node:zlib';
 import { createRouter } from './router.js';
 import { parseTurn } from './trajectory.js';
@@ -12,7 +12,7 @@ import { parseChatTurn, chatWantsReasoning, applyChatEffort, chatSessionKey } fr
 import { createDecisionLog, formatDecision, formatContinue, usageTokens } from './log.js';
 import { wantsModelRouting, modelId, clampEffort } from './model.js';
 import { turnPlan, finalOutput, assessStop, nudgeText, continueText } from './longtask.js';
-import { layaStopCheck } from './decisions.js';
+import { layaStopCheck, layaCacheStats } from './decisions.js';
 import {
   continuationBody, developerMessage, forwardHeaders, isEventStream, pipeWithContinuation, writeChunk, writeUpstreamHead,
 } from './splice.js';
@@ -96,6 +96,20 @@ const PROTOCOLS = {
 
 export function isOpenRouter(base) {
   return /(^|\.)openrouter\.ai$/i.test(new URL(base).hostname);
+}
+
+export function isOpenAiApi(base) {
+  return new URL(base).hostname.toLowerCase() === 'api.openai.com';
+}
+
+// The OpenAI API routes requests that share a prompt_cache_key to the same cache, which
+// raises prompt-cache hits for clients that send none (Chat clients, plain Responses calls).
+// Only a real session key is used: "default" would pile every client onto one key. It is
+// hashed, so a long or personal `user` value stays short and is not sent as the key. Other
+// upstreams may reject unknown fields, so they get the body unchanged.
+export function withPromptCacheKey(body, session, base) {
+  if (body.prompt_cache_key != null || session === 'default' || !isOpenAiApi(base)) return body;
+  return { ...body, prompt_cache_key: `laya:${createHash('sha1').update(session).digest('hex').slice(0, 24)}` };
 }
 
 // Watches the response without buffering an SSE stream. It keeps the final usage
@@ -199,13 +213,39 @@ function failureNote(err) {
   return String(err?.message ?? err).replace(/[\r\n]+/g, ' ').slice(0, MAX_FAILURE_NOTE);
 }
 
+// Sum one final usage snapshot per upstream generation. Missing counters stay missing;
+// repeated events within a generation replace its snapshot rather than adding to it.
+function sumResponseUsage(generations) {
+  const usages = generations.map((g) => g.usage).filter((u) => u != null);
+  if (!usages.length) return null;
+  const total = {};
+  for (const field of ['input_tokens', 'output_tokens', 'total_tokens']) {
+    const values = usages.map((u) => u[field]).filter(Number.isFinite);
+    if (values.length) total[field] = values.reduce((sum, n) => sum + n, 0);
+  }
+  for (const field of ['input_tokens_details', 'output_tokens_details']) {
+    const counts = new Map();
+    for (const usage of usages) {
+      for (const [key, value] of Object.entries(usage[field] ?? {})) {
+        if (Number.isFinite(value)) counts.set(key, (counts.get(key) ?? 0) + value);
+      }
+    }
+    if (counts.size) total[field] = Object.fromEntries(counts);
+  }
+  return total;
+}
+
 export function createProxy(config, deps = {}) {
   const router = createRouter(config, deps);
   const log = deps.log ?? createDecisionLog(config);
   const print = deps.print ?? ((s) => process.stdout.write(`${s}\n`));
   const openRouterOf = deps.isOpenRouter ?? isOpenRouter;
   const stopCheckFn = deps.stopCheckFn ?? layaStopCheck;
-  const stats = { requests: 0, routed: 0, byEffort: {}, reasoningTokens: {}, continued: 0, nudged: 0 };
+  const stats = {
+    requests: 0, routed: 0, byEffort: {}, reasoningTokens: {}, continued: 0, nudged: 0,
+    // Upstream prompt cache: input tokens of routed requests and how many of them were cached.
+    inputTokens: 0, cachedTokens: 0,
+  };
   const identity = { app: APP, version: VERSION, build: BUILD, pid: process.pid, startedAt: new Date().toISOString(), eventStream: true };
 
   // Effort for this generation, or null when the request is left alone.
@@ -237,6 +277,7 @@ export function createProxy(config, deps = {}) {
         apiKey: config.decisionKey,
         model: config.decisionModel,
         timeoutMs: config.decisionTimeoutMs,
+        cacheSize: config.decisionCacheSize,
       });
       return { ...judged, source: 'laya' };
     } catch (err) {
@@ -270,6 +311,7 @@ export function createProxy(config, deps = {}) {
       return next;
     }
     trail.body = body;
+    trail.generations.push({ effort: body.reasoning?.effort ?? null, usage: null });
     const resume = { n: continues, effort, unfinished: stop.unfinished, source: stop.source, reasons: stop.reasons };
     trail.resumes.push(resume);
     stats.continued++;
@@ -286,16 +328,18 @@ export function createProxy(config, deps = {}) {
       } finally {
         sniff.finish();
       }
+      trail.generations[0].usage = sniff.usage;
       return sniff.usage;
     }
     await untilClientLeaves(pipeWithContinuation(res, upstream, {
-      onEvent: (event) => {
-        trail.usage = event.response?.usage ?? trail.usage;
+      onEvent: (event, round) => {
+        const usage = event.response?.usage;
+        if (usage != null) trail.generations[round].usage = usage;
       },
       onCompleted: (data) => resumeTurn(trail, data),
       onError: (err) => process.stderr.write(`laya: resume failed: ${err.message}\n`),
     }));
-    return trail.usage;
+    return sumResponseUsage(trail.generations);
   }
 
   // Codex closes the connection as soon as it has response.completed, which aborts the
@@ -310,16 +354,21 @@ export function createProxy(config, deps = {}) {
 
   // Stats and the decision log of a routed request, once its answer has been relayed.
   function recordRouted({ sent, session, protocol, nudged, trail, usage, status }) {
-    const { reasoning } = usageTokens(usage);
-    if (reasoning != null && sent.effort) {
-      stats.reasoningTokens[sent.effort] = (stats.reasoningTokens[sent.effort] ?? 0) + reasoning;
+    const { input, cached } = usageTokens(usage);
+    for (const generation of trail.generations) {
+      const { reasoning } = usageTokens(generation.usage);
+      if (reasoning != null && generation.effort) {
+        stats.reasoningTokens[generation.effort] = (stats.reasoningTokens[generation.effort] ?? 0) + reasoning;
+      }
     }
+    stats.inputTokens += input ?? 0;
+    stats.cachedTokens += cached ?? 0;
     log.write({
       ts: new Date().toISOString(), session, api: protocol === PROTOCOLS.chat ? 'chat' : 'responses',
       ...sent,
       ...(nudged ? { nudged: true } : {}),
       ...(trail.resumes.length ? { continues: trail.resumes } : {}),
-      status, usage,
+      status, usage, generations: trail.generations,
     });
   }
 
@@ -349,6 +398,7 @@ export function createProxy(config, deps = {}) {
     const turn = protocol.parse(body);
     const decision = await decide(body, turn, { session, judgeTarget, applyEffort, routeModel });
     if (decision) body = rewriteRequest(protocol, body, decision, { applyEffort, inject, openRouter, routeModel });
+    body = withPromptCacheKey(body, session, base);
     const reminded = decision && config.nudge && config.mode !== 'off' ? withPlanReminder(protocol, body) : null;
     if (reminded) stats.nudged++;
     body = reminded ?? body;
@@ -364,7 +414,7 @@ export function createProxy(config, deps = {}) {
 
     const headers = { ...forwardHeaders(req.headers), 'content-type': 'application/json' };
     const signal = abortOnClose(res);
-    const trail = { body, session, url, headers, signal, resumes: [], usage: null };
+    const trail = { body, session, url, headers, signal, resumes: [], generations: [{ effort: sent?.effort ?? null, usage: null }] };
     try {
       const upstream = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
       const resumable = sent != null && config.continueTurns && config.mode !== 'off'
@@ -385,7 +435,7 @@ export function createProxy(config, deps = {}) {
     stats.requests++;
     if (req.url === '/laya/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, ...identity, mode: config.mode, ladder: config.ladder, stats }));
+      return res.end(JSON.stringify({ ok: true, ...identity, mode: config.mode, ladder: config.ladder, stats, layaCache: layaCacheStats() }));
     }
     const raw = await readBody(req);
     const path = req.url.split('?')[0];

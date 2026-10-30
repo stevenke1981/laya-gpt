@@ -23,10 +23,11 @@ jev-gpt 與 laya-gpt 可同時執行。
 git clone https://github.com/stevenke1981/laya-gpt.git
 cd laya-gpt
 npm link                                 # ← 必做：把 laya-gpt 註冊成指令；沒做會出現「無法辨識 'laya-gpt' 詞彙」
-laya-gpt --version                       # 應顯示 laya-gpt v0.3.1
+laya-gpt --version                       # 應顯示 laya-gpt v0.4.0
 laya-gpt setup                           # 安裝本機 laya（約 3 GB＋模型約 650 MB，預設放 ~\.laya-gpt\laya-deploy）
 #   想放其他磁碟：laya-gpt setup --dir E:\laya-deploy
 laya-gpt install                         # 寫入 Codex profile
+laya-gpt skills                          # 安裝 laya agent skills 到 Codex（setup 也會自動裝）
 laya-gpt codex                           # 自動啟動 laya 與 proxy，再開 Codex
 ```
 
@@ -59,6 +60,25 @@ proxy 位於 Codex（或 Chat Completions 客戶端）與上游之間，每次 g
 規則（`src/policy.js`，laya 棄權或失敗時使用，也是 turn 中的下限）：新 turn 預設 medium，招呼 → low，困難／深入／超過 600 字 → high；turn 中例行步驟 → low，剛改程式或累積讀檔 → medium，連續失敗 → high／xhigh 並鎖定數步。一旦本輪被續跑過，之後 effort 不低於預設值。
 
 改寫範圍：只改 effort（Responses 的 `reasoning.effort`；Chat 的 `reasoning_effort` 或 `reasoning.effort`），客戶端 model 為 `laya-auto`／`auto` 時另把 `model` 改成設定的模型 id。`instructions`、`tools` 與既有 `input` 不變，prompt cache 前綴維持命中；長任務協助只在**請求末端**附加訊息。
+
+## 快取命中
+
+兩層快取，都不改變決策結果：
+
+1. **laya 決策快取**（`LAYA_DECISION_CACHE`，預設 256 筆）：依 laya-decisions skill 的建議，turn 中的 state 已被 `situation()` 轉成少數固定片語，同一情境會問同一題；laya 單次前向推論結果固定，故相同的 `state`＋`questions`＋checkpoint 直接從記憶體回答（LRU，10 分鐘過期；只快取成功的答案，錯誤不快取；同時送出的相同呼叫共用一次請求）。命中時 reasons 會多一個 `cached`（停止判斷為 `(cached)`）。`/laya/health` 的 `layaCache` 回報 `hits`／`misses`／`entries`；`LAYA_DECISION_CACHE=0` 關閉。
+2. **上游 prompt cache**：proxy 只改 effort（與 alias 時的 model），提醒與續跑訊息只附加在請求**末端**，前綴不變。上游為 OpenAI API（`api.openai.com`）且請求沒帶 `prompt_cache_key` 時（Chat 客戶端、自行呼叫的 Responses），以 session key 的雜湊（`laya:<24 hex>`，長度固定、不外送原始 `user` 值）補上，讓同一對話路由到同一份快取；Codex 自帶 `prompt_cache_key`，不動。ChatGPT 後端、OpenRouter 與自訂上游不補（可能拒絕未知欄位）。`/laya/health` 的 `stats.inputTokens`／`stats.cachedTokens` 與 `laya-gpt stats` 顯示快取命中率。
+
+## laya skills
+
+`laya-gpt skills` 把 agent skills 裝進 `$CODEX_HOME/skills`（`--claude` 另裝到 `~/.claude/skills`），讓 Codex／Claude Code 知道怎麼用 laya：
+
+| skill | 來源 | 內容 |
+|---|---|---|
+| `laya-gpt` | 本 repo `skills/laya-gpt` | proxy 做什麼、`[laya]` developer 訊息的意思（做完計畫並驗證、別問要不要繼續）、status／stats／tail 等指令 |
+| `laya-decisions` | laya-deploy `skills/` | 以 laya decision mode 向本機 laya 發問、選 checkpoint、設門檻 |
+| `laya-computer-use` | laya-deploy `skills/` | 經 MCP 操作 Windows 桌面 |
+
+`laya-gpt setup` 完成後會自動安裝到 Codex。每個安裝的資料夾內有 `.laya-gpt-skill` 標記；已存在但非本工具安裝的同名資料夾會略過（`--force` 覆寫）。`laya-gpt uninstall` 只移除有標記者。
 
 ## 長任務協助：不讓 GPT-6.1 Terra 亂停
 
@@ -141,11 +161,12 @@ codex -p layagpt           # 視窗 2
 | `laya-gpt serve` | 前景執行 proxy（預設 `127.0.0.1:8790`） |
 | `laya-gpt setup [--dir D]` | 安裝 laya-deploy（clone、`uv sync --extra model`、下載 checkpoint） |
 | `laya-gpt install [--force]` | 寫入 `layagpt` profile |
+| `laya-gpt skills [--claude] [--force]` | 安裝 laya agent skills（見「laya skills」） |
 | `laya-gpt install --global` | 另把 laya-gpt 設為 `config.toml` 的預設 provider（給 Codex 桌面版／IDE 擴充） |
 | `laya-gpt uninstall` | 還原 `config.toml`、移除本工具寫的 profile |
 | `laya-gpt codex [args...]` | 必要時啟動 proxy，再執行 `codex -p layagpt [args...]` |
 | `laya-gpt tail` | 即時追蹤決策（讀 `decisions.jsonl`） |
-| `laya-gpt stats` | 依 effort 分組統計 generation、reasoning tokens 與續跑次數 |
+| `laya-gpt stats` | 依 effort 分組統計 generation、reasoning tokens、續跑次數與 prompt cache 命中率 |
 | `laya-gpt status` | 顯示執行中 proxy 的版本；過舊或未執行時 exit 1 |
 | `laya-gpt stop` | 停止執行中的 proxy（只停 `app` 為 `laya-gpt` 者） |
 | `laya-gpt --version` | 磁碟上程式碼的版本與 build |
@@ -209,6 +230,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 | `LAYA_DEPLOY_PYTHON` | checkout 的 `.venv` Python | 改用其他 Python 啟動 laya-deploy |
 | `LAYA_API_KEY` | — | laya-deploy 設了 `LAYA_DEPLOY_API_KEY` 時填同值 |
 | `LAYA_DECISION_TIMEOUT_MS` | `2000` | 單次 laya 決策逾時（至少 1）；逾時後暫停 laya 30 秒 |
+| `LAYA_DECISION_CACHE` | `256` | laya 決策快取筆數；`0` 關閉 |
 | `LAYA_MIN_CONFIDENCE` | `0.5` | laya 最高機率低於此值即棄權，改用規則 |
 | `LAYA_CONTINUE` | `on` | 提早收工自動續跑 |
 | `LAYA_MAX_CONTINUES` | `5` | 每個 turn 最多續跑次數 |
@@ -225,7 +247,9 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 | 檔案 | 職責 |
 |---|---|
 | `src/config.js` | 環境變數與驗證 |
-| `src/decisions.js` | laya 決策：`effortCall()`／`situation()`（state 與問題）、`layaDecide()`、`combineEffort()`（把關）、`layaStopCheck()` |
+| `src/decisions.js` | laya 決策：`effortCall()`／`situation()`（state 與問題）、`layaDecide()`、`combineEffort()`（把關）、`layaStopCheck()`、決策快取 |
+| `src/skills.js` | 尋找與安裝／移除 laya agent skills |
+| `skills/laya-gpt/SKILL.md` | 給 agent 的 laya-gpt skill |
 | `src/policy.js` | 規則判斷 `assess()`、hysteresis `nextState()` |
 | `src/router.js` | 依 session 保存 effort 狀態與本輪續跑次數（`continuesOf`、`noteContinue`） |
 | `src/longtask.js` | 計畫解析 `turnPlan()`、`finalOutput()`、規則版停止判斷 `assessStop()`、提醒與續跑訊息 |
@@ -243,7 +267,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 - **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；Codex 桌面版（`install --global`）未實測；`laya-gpt setup` 的全新安裝路徑（git clone＋uv sync 約 3 GB）未實跑，自動啟動／停止則已以既有 checkout 實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
 - laya 實測案例僅 29 則，皆為短句；長篇、混雜程式碼的收尾文字之準確度未量測。請以 `laya-gpt stats` 與 `decisions.jsonl` 在自身工作量觀察，必要時調 `LAYA_CONTINUE_THRESHOLD`、`LAYA_MIN_CONFIDENCE`。
 - 困難需求 laya 常信心不足而棄權（實測 0.37–0.40），此時由關鍵字規則決定。
-- 回傳給客戶端的 `usage` 只含最後一個回應；續跑那一代的 tokens 也算在上游帳單裡。
+- 回傳給客戶端的 `usage` 只含最後一個回應；`decisions.jsonl` 的 `usage`、`/laya/health` 與 `laya-gpt stats` 會累計各次續跑已回報的 tokens。記錄中的 `generations` 保留逐代 usage 與實際 effort，供 reasoning tokens 分組；未回報的 usage 不估算，舊記錄也無法還原先前遺失的用量。
 - 停止判斷取 laya 與規則之大者：收尾若是請使用者核可（"I need your approval to continue"）而 laya 判為 in progress，仍可能續跑；續跑上限 `LAYA_MAX_CONTINUES` 為最後防線。
 - Chat Completions 不續跑；Codex 的 websocket 傳輸不經過 proxy。
 
@@ -263,3 +287,4 @@ node scripts/laya-eval.mjs        # 需執行中的 laya：量測 effort 與停�
 | v0.2.0 | 2026-10-29 | `install --global`：改寫 `config.toml`（可逆、自動備份）讓 Codex 桌面版／IDE 擴充也經過 proxy；新增 `uninstall` | `bin/laya.js`、`src/codexconfig.js`、README |
 | v0.3.0 | 2026-10-29 | 整合 laya-deploy：`laya-gpt setup` 安裝、`serve` 自動啟動（預載所用 checkpoint）、`stop` 一併停止、`status` 顯示 laya；預設 checkpoint 改為 multilingual；停止判斷加「end 確定已完成則忽略 work」把關 | `src/layaserver.js`、`bin/laya.js`、`src/config.js`、`src/decisions.js`、README |
 | v0.3.1 | 2026-10-29 | README：新增「快速開始」，強調 clone 後須先 `npm link`、列出 git／uv 前置需求、`setup --dir` 指定安裝位置與指令找不到時的排解 | README |
+| v0.4.0 | 2026-10-29 | 快取命中：laya 決策快取（LRU、同時呼叫共用、`LAYA_DECISION_CACHE`）、OpenAI API 缺 `prompt_cache_key` 時補上 session key、統計上游 cached tokens（`/laya/health`、`stats`）；新增 `laya-gpt skills` 安裝 laya-gpt／laya-decisions／laya-computer-use skills，`setup` 自動安裝、`uninstall` 移除 | `src/decisions.js`、`src/proxy.js`、`src/log.js`、`src/config.js`、`src/skills.js`、`skills/`、`bin/laya.js`、README |

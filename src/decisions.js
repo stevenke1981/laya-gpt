@@ -128,13 +128,33 @@ export function effortCall(turn, ladder) {
   };
 }
 
+function isRecord(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function choiceOf(answer, options) {
   const p = answer?.probabilities;
-  if (answer?.type !== 'choice' || !options.includes(answer.choice) || !p || typeof p !== 'object') {
+  if (!isRecord(answer) || answer.type !== 'choice' || !options.includes(answer.choice) || !isRecord(p)
+    || !options.every((key) => Object.hasOwn(p, key) && Number.isFinite(p[key]) && p[key] >= 0 && p[key] <= 1)) {
     throw new Error('laya returned an unexpected answer shape');
   }
-  const prob = (key) => (Number.isFinite(p[key]) ? p[key] : 0);
+  const prob = (key) => p[key];
   return { choice: answer.choice, top: prob(answer.choice), prob };
+}
+
+// Validate the entire requested answer set before any caller can reuse a response.
+// Confidence thresholds are caller policy; a well-formed abstention can still be cached.
+function validateAnswers(answers, questions) {
+  if (!isRecord(answers)) throw new Error('laya returned an unexpected answer shape');
+  for (const [key, question] of Object.entries(questions)) {
+    if (!Object.hasOwn(answers, key)) throw new Error('laya returned an unexpected answer shape');
+    choiceOf(answers[key], Object.keys(question.criteria));
+  }
+  // toAssessment consumes optional stuck data even on a fresh turn, where only
+  // effort was requested. Validate that parser input before retaining it as well.
+  if (questions.effort && !questions.stuck && answers.stuck != null) {
+    choiceOf(answers.stuck, Object.keys(STUCK_QUESTION.criteria));
+  }
 }
 
 /**
@@ -179,6 +199,56 @@ export function resetLayaPause() {
   pausedUntil.clear();
 }
 
+// laya answers in one deterministic forward pass, and situation() turns steps into a few
+// fixed phrases (laya-decisions skill: "so judgments repeat and can be cached"), so an
+// identical call is answered from memory. Only answers are kept, never errors; identical
+// calls in flight share one request. The key holds the URL and checkpoint, and an entry
+// expires after CACHE_TTL_MS in case the server was restarted with other weights.
+const CACHE_TTL_MS = 10 * 60_000;
+const cache = new Map();
+const cacheCounts = { hits: 0, misses: 0 };
+
+/** Hits, misses and entries of the decision cache since the process started. */
+export function layaCacheStats() {
+  return { ...cacheCounts, entries: cache.size };
+}
+
+/** Empties the decision cache and its counters; for tests. */
+export function resetLayaCache() {
+  cache.clear();
+  cacheCounts.hits = 0;
+  cacheCounts.misses = 0;
+}
+
+/**
+ * postDecision behind the cache; `opts.cacheSize` entries at most (0 or unset: no cache).
+ * @returns {Promise<{body:object, cached:boolean}>}
+ */
+async function cachedDecision(opts, state, questions) {
+  const size = opts.cacheSize ?? 0;
+  if (!(size > 0)) return { body: await postDecision(opts, state, questions), cached: false };
+  const key = JSON.stringify([opts.url, opts.model, state, questions]);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+    cache.delete(key);
+    cache.set(key, hit);
+    cacheCounts.hits++;
+    return { body: await hit.body, cached: true };
+  }
+  cacheCounts.misses++;
+  const entry = { at: Date.now(), body: null };
+  // Every waiter shares the validated promise, including its eviction on failure. An
+  // older request evicted by the LRU must not delete a newer request for the same key.
+  entry.body = postDecision(opts, state, questions).catch((err) => {
+    if (cache.get(key) === entry) cache.delete(key);
+    throw err;
+  });
+  cache.delete(key);
+  cache.set(key, entry);
+  if (cache.size > size) cache.delete(cache.keys().next().value);
+  return { body: await entry.body, cached: false };
+}
+
 /** POSTs one Decisions request; resolves to the parsed body or throws on HTTP error. */
 async function postDecision(opts, state, questions) {
   const until = pausedUntil.get(opts.url) ?? 0;
@@ -199,19 +269,21 @@ async function postDecision(opts, state, questions) {
   pausedUntil.delete(opts.url);
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(`laya HTTP ${res.status}: ${body?.error?.message ?? 'no error body'}`);
+  validateAnswers(body?.answers, questions);
   return body;
 }
 
 /**
  * @param {{userText:string, steps:Array<{kind:string, command:string, failed:boolean|null}>}} turn
- * @param {{url:string, apiKey?:string, model:string, timeoutMs:number, ladder:string[], minConfidence:number}} opts
+ * @param {{url:string, apiKey?:string, model:string, timeoutMs:number, ladder:string[], minConfidence:number, cacheSize?:number}} opts
  * @returns {Promise<{target:number, hold:number, release:boolean, stuck:number|null, reasons:string[], cost:null}>}
  */
 export async function layaDecide(turn, opts) {
   const { state, questions } = effortCall(turn, opts.ladder);
-  const body = await postDecision(opts, state, questions);
+  const { body, cached } = await cachedDecision(opts, state, questions);
+  const assessment = toAssessment(body?.answers, opts.ladder, opts.minConfidence);
   // laya runs locally: there is no per-call price.
-  return { ...toAssessment(body?.answers, opts.ladder, opts.minConfidence), cost: null };
+  return { ...assessment, ...(cached ? { reasons: [...assessment.reasons, 'cached'] } : {}), cost: null };
 }
 
 /** The end of the closing text, where a promise or a question to the user sits. */
@@ -228,7 +300,7 @@ export function closingOf(finalText) {
  * @param {object} turn the parsed turn (userText, steps)
  * @param {{total:number, done:number, open:string[]}|null} plan
  * @param {string} finalText the text of the generation that ended the turn
- * @param {{url:string, apiKey?:string, model:string, timeoutMs:number}} opts
+ * @param {{url:string, apiKey?:string, model:string, timeoutMs:number, cacheSize?:number}} opts
  * @returns {Promise<{unfinished:number, reasons:string[], cost:null}>}
  */
 export async function layaStopCheck(turn, plan, finalText, opts) {
@@ -236,12 +308,12 @@ export async function layaStopCheck(turn, plan, finalText, opts) {
   if (HARD_STOP_REASONS.has(rules.reasons[0]) || plan?.open?.length > 0) return { ...rules, cost: null };
   const closing = closingOf(finalText);
   if (!closing) return { ...rules, cost: null };
-  const body = await postDecision(opts, { closing }, STOP_QUESTIONS);
+  const { body, cached } = await cachedDecision(opts, { closing }, STOP_QUESTIONS);
   const end = choiceOf(body?.answers?.end, Object.keys(STOP_QUESTIONS.end.criteria));
   const work = choiceOf(body?.answers?.work, Object.keys(STOP_QUESTIONS.work.criteria));
   const continuing = end.prob('will_continue');
   const inProgress = work.prob('in_progress');
-  const reasons = [`laya ${end.choice} ${end.top.toFixed(2)}, in progress ${inProgress.toFixed(2)}`];
+  const reasons = [`laya ${end.choice} ${end.top.toFixed(2)}, in progress ${inProgress.toFixed(2)}${cached ? ' (cached)' : ''}`];
   // A request for the user is a legitimate stop: only laya's own "will continue" counts.
   if (end.choice === 'needs_user') return { unfinished: continuing, reasons, cost: null };
   // A summary that lists finished items reads as "in progress" to `work`; when `end` is

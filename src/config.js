@@ -78,6 +78,8 @@ export function loadConfig(env = process.env) {
     decisionModel: env.LAYA_DECISION_MODEL || 'multilingual',
     decisionKey: env.LAYA_API_KEY || '',
     decisionTimeoutMs,
+    // Identical laya calls (same state, questions and checkpoint) answered from memory; 0 turns it off.
+    decisionCacheSize: intEnv(env, 'LAYA_DECISION_CACHE', 256),
     // Start the local laya server (laya-deploy) with the proxy when none answers.
     layaAutostart: switchEnv(env, 'LAYA_AUTOSTART', 'on'),
     // laya is overconfident: below this top probability it abstains and the rules decide.
