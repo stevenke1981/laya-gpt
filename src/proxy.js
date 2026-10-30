@@ -213,6 +213,28 @@ function failureNote(err) {
   return String(err?.message ?? err).replace(/[\r\n]+/g, ' ').slice(0, MAX_FAILURE_NOTE);
 }
 
+// Sum one final usage snapshot per upstream generation. Missing counters stay missing;
+// repeated events within a generation replace its snapshot rather than adding to it.
+function sumResponseUsage(generations) {
+  const usages = generations.map((g) => g.usage).filter((u) => u != null);
+  if (!usages.length) return null;
+  const total = {};
+  for (const field of ['input_tokens', 'output_tokens', 'total_tokens']) {
+    const values = usages.map((u) => u[field]).filter(Number.isFinite);
+    if (values.length) total[field] = values.reduce((sum, n) => sum + n, 0);
+  }
+  for (const field of ['input_tokens_details', 'output_tokens_details']) {
+    const counts = new Map();
+    for (const usage of usages) {
+      for (const [key, value] of Object.entries(usage[field] ?? {})) {
+        if (Number.isFinite(value)) counts.set(key, (counts.get(key) ?? 0) + value);
+      }
+    }
+    if (counts.size) total[field] = Object.fromEntries(counts);
+  }
+  return total;
+}
+
 export function createProxy(config, deps = {}) {
   const router = createRouter(config, deps);
   const log = deps.log ?? createDecisionLog(config);
@@ -289,6 +311,7 @@ export function createProxy(config, deps = {}) {
       return next;
     }
     trail.body = body;
+    trail.generations.push({ effort: body.reasoning?.effort ?? null, usage: null });
     const resume = { n: continues, effort, unfinished: stop.unfinished, source: stop.source, reasons: stop.reasons };
     trail.resumes.push(resume);
     stats.continued++;
@@ -305,16 +328,18 @@ export function createProxy(config, deps = {}) {
       } finally {
         sniff.finish();
       }
+      trail.generations[0].usage = sniff.usage;
       return sniff.usage;
     }
     await untilClientLeaves(pipeWithContinuation(res, upstream, {
-      onEvent: (event) => {
-        trail.usage = event.response?.usage ?? trail.usage;
+      onEvent: (event, round) => {
+        const usage = event.response?.usage;
+        if (usage != null) trail.generations[round].usage = usage;
       },
       onCompleted: (data) => resumeTurn(trail, data),
       onError: (err) => process.stderr.write(`laya: resume failed: ${err.message}\n`),
     }));
-    return trail.usage;
+    return sumResponseUsage(trail.generations);
   }
 
   // Codex closes the connection as soon as it has response.completed, which aborts the
@@ -329,9 +354,12 @@ export function createProxy(config, deps = {}) {
 
   // Stats and the decision log of a routed request, once its answer has been relayed.
   function recordRouted({ sent, session, protocol, nudged, trail, usage, status }) {
-    const { reasoning, input, cached } = usageTokens(usage);
-    if (reasoning != null && sent.effort) {
-      stats.reasoningTokens[sent.effort] = (stats.reasoningTokens[sent.effort] ?? 0) + reasoning;
+    const { input, cached } = usageTokens(usage);
+    for (const generation of trail.generations) {
+      const { reasoning } = usageTokens(generation.usage);
+      if (reasoning != null && generation.effort) {
+        stats.reasoningTokens[generation.effort] = (stats.reasoningTokens[generation.effort] ?? 0) + reasoning;
+      }
     }
     stats.inputTokens += input ?? 0;
     stats.cachedTokens += cached ?? 0;
@@ -340,7 +368,7 @@ export function createProxy(config, deps = {}) {
       ...sent,
       ...(nudged ? { nudged: true } : {}),
       ...(trail.resumes.length ? { continues: trail.resumes } : {}),
-      status, usage,
+      status, usage, generations: trail.generations,
     });
   }
 
@@ -386,7 +414,7 @@ export function createProxy(config, deps = {}) {
 
     const headers = { ...forwardHeaders(req.headers), 'content-type': 'application/json' };
     const signal = abortOnClose(res);
-    const trail = { body, session, url, headers, signal, resumes: [], usage: null };
+    const trail = { body, session, url, headers, signal, resumes: [], generations: [{ effort: sent?.effort ?? null, usage: null }] };
     try {
       const upstream = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
       const resumable = sent != null && config.continueTurns && config.mode !== 'off'

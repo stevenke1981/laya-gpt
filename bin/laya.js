@@ -373,10 +373,15 @@ function rankEffort(effort) {
   return i >= 0 ? i : EFFORTS.length;
 }
 
-/** Groups decisions by effort in ladder order; rows that set only the model go under "-". */
+// New records contain each upstream generation; old logs only have one usage snapshot.
+function generationsOf(row) {
+  return row.generations?.length ? row.generations : [{ effort: row.effort, usage: row.usage }];
+}
+
+/** Groups generations by effort in ladder order; rows that set only the model go under "-". */
 function groupByEffort(rows) {
   const groups = new Map();
-  for (const r of rows) {
+  for (const r of rows.flatMap(generationsOf)) {
     const effort = r.effort ?? '-';
     const g = groups.get(effort) ?? { effort, gens: 0, reasoning: 0, output: 0 };
     const t = usageTokens(r.usage);
@@ -393,7 +398,7 @@ function stats(config) {
   if (rows.length === 0) return console.log(`no decisions yet in ${config.logFile}`);
   const layaCalls = rows.filter((r) => r.source === 'laya').length;
   const resumed = rows.reduce((sum, r) => sum + (r.continues?.length ?? 0), 0);
-  console.log(`${rows.length} generations, ${new Set(rows.map((r) => r.session)).size} sessions, `
+  console.log(`${rows.flatMap(generationsOf).length} generations, ${new Set(rows.map((r) => r.session)).size} sessions, `
     + `${layaCalls} routed by laya, ${resumed} early stops resumed`);
   const tokens = rows.map((r) => usageTokens(r.usage));
   const input = tokens.reduce((sum, t) => sum + (t.input ?? 0), 0);

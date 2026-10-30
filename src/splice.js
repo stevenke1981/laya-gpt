@@ -279,7 +279,7 @@ async function release(res, event, round, chain, state) {
 // Handles one parsed event. Returns the continuation Response when the held event was replaced.
 async function deliver(res, event, round, hooks, state, chain) {
   const { data } = event;
-  if (data) hooks.onEvent?.(data);
+  if (data) hooks.onEvent?.(data, round);
   if (round > 0 && REPEATED_EVENTS.has(event.type)) return null;
   if (round === 0 && chain.firstId == null && typeof data?.response?.id === 'string') chain.firstId = data.response.id;
   if (event.type === 'response.output_item.done' && data?.item && typeof data.item === 'object') {
@@ -356,7 +356,7 @@ async function streamRound(res, response, round, hooks, chain) {
  * streamed items disagree in count, the event is released without asking.
  * @param {import('node:http').ServerResponse} res
  * @param {Response} upstream
- * @param {{onEvent?:(data:object)=>void, onCompleted:(data:object, round:number)=>Promise<Response|null>|Response|null, onError?:(err:Error)=>void}} hooks
+ * @param {{onEvent?:(data:object, round:number)=>void, onCompleted:(data:object, round:number)=>Promise<Response|null>|Response|null, onError?:(err:Error)=>void}} hooks
  */
 export async function pipeWithContinuation(res, upstream, hooks) {
   writeUpstreamHead(res, upstream);

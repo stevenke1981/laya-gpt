@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createProxy } from '../src/proxy.js';
 import { loadConfig } from '../src/config.js';
-import { formatContinue } from '../src/log.js';
+import { formatContinue, usageTokens } from '../src/log.js';
 
 // Every test runs against a local upstream; the decision and stop calls are injected,
 // so nothing leaves the machine. The defaults fail loudly rather than reach the network.
@@ -32,8 +32,20 @@ function answer(id, text, output = [messageItem(`msg_${id}`, text)]) {
   ];
 }
 const sse = (events) => ({ body: events.join('') });
-// A generation whose usage is told apart from the others, to see which one the log keeps.
-const withUsage = (events, outputTokens) => events.map((e) => e.replace(/"output_tokens":9/, `"output_tokens":${outputTokens}`));
+// Each generation reports its own usage, including repeated snapshots before completion.
+function withUsage(events, usage, snapshots = false) {
+  const parsed = events.map((raw) => {
+    const data = JSON.parse(raw.split('data: ')[1]);
+    if (data.type === 'response.completed' || (snapshots && data.response)) data.response.usage = usage;
+    return ev(data.type, data);
+  });
+  return parsed;
+}
+
+const tokenUsage = (input, cached, output, reasoning) => ({
+  input_tokens: input, input_tokens_details: { cached_tokens: cached },
+  output_tokens: output, output_tokens_details: { reasoning_tokens: reasoning }, total_tokens: input + output,
+});
 
 const user = (text) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text }] });
 const shellStep = (callId) => [
@@ -171,17 +183,75 @@ test('the continuation replays the output without ids, adds the [laya] developer
   }
 });
 
-test('the decision log keeps the usage of the last generation and the reasoning tokens it reports', async () => {
-  const h = await start({
-    env: HEURISTIC,
-    replies: [sse(withUsage(answer('r1', PROMISE), 11)), sse(withUsage(answer('r2', DONE), 22))],
+for (const [name, usages] of [
+  ['a cold first request', [tokenUsage(100, 0, 11, 3)]],
+  ['a first request with a cache hit', [tokenUsage(100, 80, 11, 3)]],
+  ['multiple cached continuations', [tokenUsage(100, 80, 11, 3), tokenUsage(140, 120, 22, 7), tokenUsage(180, 160, 33, 13)]],
+  ['a cold request followed by cache hits', [tokenUsage(100, 0, 11, 3), tokenUsage(140, 120, 22, 7), tokenUsage(180, 160, 33, 13)]],
+  ['a cache hit followed by a cold continuation', [tokenUsage(100, 80, 11, 3), tokenUsage(140, 0, 22, 7)]],
+]) {
+  test(`usage counts each generation once for ${name}`, async () => {
+    const efforts = ['low', 'medium', 'high'];
+    const h = await start({
+      env: HEURISTIC,
+      replies: usages.map((usage, i) => sse(withUsage(answer(`r${i}`, i === usages.length - 1 ? DONE : PROMISE), usage, true))),
+    });
+    try {
+      await (await post(h, request([user('fix the parser'), ...shellStep('k1')]))).text();
+      await until(() => h.logged.length === 1);
+      assert.equal(h.seen.length, usages.length);
+      const input = usages.reduce((n, u) => n + u.input_tokens, 0);
+      const cached = usages.reduce((n, u) => n + u.input_tokens_details.cached_tokens, 0);
+      const output = usages.reduce((n, u) => n + u.output_tokens, 0);
+      const reasoning = usages.reduce((n, u) => n + u.output_tokens_details.reasoning_tokens, 0);
+      assert.deepEqual(usageTokens(h.logged[0].usage), { input, cached, output, reasoning });
+      assert.equal(h.logged[0].usage.total_tokens, input + output);
+      assert.deepEqual(h.logged[0].generations, usages.map((usage, i) => ({ effort: efforts[i], usage })));
+      assert.equal(h.stats.inputTokens, input);
+      assert.equal(h.stats.cachedTokens, cached);
+      assert.deepEqual(h.stats.reasoningTokens, Object.fromEntries(usages.map((u, i) => [efforts[i], u.output_tokens_details.reasoning_tokens])));
+      const health = await (await fetch(`${h.base}/laya/health`)).json();
+      assert.equal(health.stats.inputTokens, input);
+      assert.equal(health.stats.cachedTokens, cached);
+      assert.deepEqual(health.stats.reasoningTokens, h.stats.reasoningTokens);
+    } finally {
+      h.close();
+    }
   });
+}
+
+test('a rejected continuation preserves the first generation usage without counting it twice', async () => {
+  const usage = tokenUsage(100, 0, 11, 3);
+  const h = await start({ env: HEURISTIC, replies: [
+    sse(withUsage(answer('r1', PROMISE), usage, true)),
+    { status: 503, type: 'application/json', body: '{"error":"unavailable"}' },
+  ] });
   try {
     await (await post(h, request([user('fix the parser'), ...shellStep('k1')]))).text();
     await until(() => h.logged.length === 1);
-    assert.equal(h.logged[0].usage.output_tokens, 22);
-    assert.equal(h.logged[0].usage.output_tokens_details.reasoning_tokens, 7);
-    assert.equal(h.stats.reasoningTokens.low, 7, 'reasoning tokens are counted under the routed effort');
+    assert.deepEqual(h.logged[0].usage, usage);
+    assert.equal(h.stats.inputTokens, 100);
+    assert.equal(h.stats.cachedTokens, 0);
+    assert.deepEqual(h.stats.reasoningTokens, { low: 3 });
+  } finally {
+    h.close();
+  }
+});
+
+test('a broken continuation without usage does not recount the released completed event', async () => {
+  const usage = tokenUsage(100, 80, 11, 3);
+  const h = await start({ env: HEURISTIC, replies: [
+    sse(withUsage(answer('r1', PROMISE), usage, true)),
+    sse([ev('response.created', { response: { id: 'r2', usage: null } })]),
+  ] });
+  try {
+    await (await post(h, request([user('fix the parser'), ...shellStep('k1')]))).text();
+    await until(() => h.logged.length === 1);
+    assert.deepEqual(h.logged[0].usage, usage);
+    assert.deepEqual(h.logged[0].generations, [{ effort: 'low', usage }, { effort: 'medium', usage: null }]);
+    assert.equal(h.stats.inputTokens, 100);
+    assert.equal(h.stats.cachedTokens, 80);
+    assert.deepEqual(h.stats.reasoningTokens, { low: 3 });
   } finally {
     h.close();
   }

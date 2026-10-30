@@ -267,7 +267,7 @@ aider --openai-api-base http://127.0.0.1:8790/v1 --model openai/laya-auto
 - **未驗證**：未以真實 Codex＋GPT-6.1 Terra 長任務實測；Codex 桌面版（`install --global`）未實測；`laya-gpt setup` 的全新安裝路徑（git clone＋uv sync 約 3 GB）未實跑，自動啟動／停止則已以既有 checkout 實測；續跑串流以本機模擬上游驗證（同 jev-gpt）。
 - laya 實測案例僅 29 則，皆為短句；長篇、混雜程式碼的收尾文字之準確度未量測。請以 `laya-gpt stats` 與 `decisions.jsonl` 在自身工作量觀察，必要時調 `LAYA_CONTINUE_THRESHOLD`、`LAYA_MIN_CONFIDENCE`。
 - 困難需求 laya 常信心不足而棄權（實測 0.37–0.40），此時由關鍵字規則決定。
-- 回傳給客戶端的 `usage` 只含最後一個回應；續跑那一代的 tokens 也算在上游帳單裡。
+- 回傳給客戶端的 `usage` 只含最後一個回應；`decisions.jsonl` 的 `usage`、`/laya/health` 與 `laya-gpt stats` 會累計各次續跑已回報的 tokens。記錄中的 `generations` 保留逐代 usage 與實際 effort，供 reasoning tokens 分組；未回報的 usage 不估算，舊記錄也無法還原先前遺失的用量。
 - 停止判斷取 laya 與規則之大者：收尾若是請使用者核可（"I need your approval to continue"）而 laya 判為 in progress，仍可能續跑；續跑上限 `LAYA_MAX_CONTINUES` 為最後防線。
 - Chat Completions 不續跑；Codex 的 websocket 傳輸不經過 proxy。
 

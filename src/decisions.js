@@ -128,13 +128,33 @@ export function effortCall(turn, ladder) {
   };
 }
 
+function isRecord(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function choiceOf(answer, options) {
   const p = answer?.probabilities;
-  if (answer?.type !== 'choice' || !options.includes(answer.choice) || !p || typeof p !== 'object') {
+  if (!isRecord(answer) || answer.type !== 'choice' || !options.includes(answer.choice) || !isRecord(p)
+    || !options.every((key) => Object.hasOwn(p, key) && Number.isFinite(p[key]) && p[key] >= 0 && p[key] <= 1)) {
     throw new Error('laya returned an unexpected answer shape');
   }
-  const prob = (key) => (Number.isFinite(p[key]) ? p[key] : 0);
+  const prob = (key) => p[key];
   return { choice: answer.choice, top: prob(answer.choice), prob };
+}
+
+// Validate the entire requested answer set before any caller can reuse a response.
+// Confidence thresholds are caller policy; a well-formed abstention can still be cached.
+function validateAnswers(answers, questions) {
+  if (!isRecord(answers)) throw new Error('laya returned an unexpected answer shape');
+  for (const [key, question] of Object.entries(questions)) {
+    if (!Object.hasOwn(answers, key)) throw new Error('laya returned an unexpected answer shape');
+    choiceOf(answers[key], Object.keys(question.criteria));
+  }
+  // toAssessment consumes optional stuck data even on a fresh turn, where only
+  // effort was requested. Validate that parser input before retaining it as well.
+  if (questions.effort && !questions.stuck && answers.stuck != null) {
+    choiceOf(answers.stuck, Object.keys(STUCK_QUESTION.criteria));
+  }
 }
 
 /**
@@ -216,19 +236,17 @@ async function cachedDecision(opts, state, questions) {
     return { body: await hit.body, cached: true };
   }
   cacheCounts.misses++;
-  const entry = { at: Date.now(), body: postDecision(opts, state, questions) };
+  const entry = { at: Date.now(), body: null };
+  // Every waiter shares the validated promise, including its eviction on failure. An
+  // older request evicted by the LRU must not delete a newer request for the same key.
+  entry.body = postDecision(opts, state, questions).catch((err) => {
+    if (cache.get(key) === entry) cache.delete(key);
+    throw err;
+  });
   cache.delete(key);
   cache.set(key, entry);
   if (cache.size > size) cache.delete(cache.keys().next().value);
-  try {
-    const body = await entry.body;
-    // An answer-less body (laya still loading, a proxy page) is not worth keeping.
-    if (!body?.answers || typeof body.answers !== 'object') cache.delete(key);
-    return { body, cached: false };
-  } catch (err) {
-    if (cache.get(key) === entry) cache.delete(key);
-    throw err;
-  }
+  return { body: await entry.body, cached: false };
 }
 
 /** POSTs one Decisions request; resolves to the parsed body or throws on HTTP error. */
@@ -251,6 +269,7 @@ async function postDecision(opts, state, questions) {
   pausedUntil.delete(opts.url);
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(`laya HTTP ${res.status}: ${body?.error?.message ?? 'no error body'}`);
+  validateAnswers(body?.answers, questions);
   return body;
 }
 

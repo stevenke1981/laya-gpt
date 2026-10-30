@@ -236,6 +236,38 @@ test('stats groups decisions by effort in ladder order and counts resumed early 
   }
 });
 
+test('stats sums prompt usage once and groups continuation tokens by their actual effort', async () => {
+  const home = tempDir();
+  const usage = (input, cached, output, reasoning) => ({
+    input_tokens: input, input_tokens_details: { cached_tokens: cached },
+    output_tokens: output, output_tokens_details: { reasoning_tokens: reasoning },
+  });
+  const row = {
+    model: 'gpt-x', effort: 'low', session: 'a', source: 'laya',
+    usage: usage(420, 280, 66, 23),
+    continues: [{ effort: 'medium' }, { effort: 'high' }],
+    generations: [
+      { effort: 'low', usage: usage(100, 0, 11, 3) },
+      { effort: 'medium', usage: usage(140, 120, 22, 7) },
+      { effort: 'high', usage: usage(180, 160, 33, 13) },
+    ],
+  };
+  // Old records still contribute once; their missing per-generation detail cannot be reconstructed.
+  const legacy = { effort: 'low', session: 'b', usage: usage(80, 20, 4, 1) };
+  fs.writeFileSync(path.join(home, 'decisions.jsonl'), [row, legacy].map(JSON.stringify).join('\n') + '\n');
+  try {
+    const res = await run(['stats'], { ...process.env, LAYA_HOME: home });
+    assert.equal(res.code, 0, res.out);
+    assert.match(res.out, /^4 generations, 2 sessions, 1 routed by laya, 2 early stops resumed/);
+    assert.match(res.out, /prompt cache: 300 of 500 input tok cached \(60\.0%\)/);
+    assert.match(res.out, /low\s+2 gens\s+2 avg reasoning tok\s+15 output tok/);
+    assert.match(res.out, /medium\s+1 gens\s+7 avg reasoning tok\s+22 output tok/);
+    assert.match(res.out, /high\s+1 gens\s+13 avg reasoning tok\s+33 output tok/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('help names the laya-gpt commands, the variables and the port', async () => {
   const home = tempDir();
   try {
